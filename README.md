@@ -2,12 +2,12 @@
 
 Generate editable RTL hierarchy block diagrams from a Verilog/SystemVerilog filelist.
 
-`rtl_datapath_visualizer.py` reads an `rte`-style `.f` filelist, infers the TOP module, and draws a nested containment diagram. TOP is the outermost block, direct child instances are placed inside it, and each deeper hierarchy level gets a slightly different color. A numeric depth controls how many instance levels are shown.
+`RTL_blockdiagram.py` reads an `rte`-style `.f` filelist, infers the TOP module, and draws a nested containment diagram. TOP is the outermost block, direct child instances are placed inside it, and each deeper hierarchy level gets a slightly different color. A numeric depth controls how many instance levels are shown.
 
 ## Usage
 
 ```bash
-python3 rtl_datapath_visualizer.py ./rte/filelist.f 3
+python3 RTL_blockdiagram.py ./rte/filelist.f 3
 ```
 
 Depth rules:
@@ -20,7 +20,7 @@ Depth rules:
 Example with an explicit root module:
 
 ```bash
-python3 rtl_datapath_visualizer.py ./rte/filelist.f 2 --top subsystem_top
+python3 RTL_blockdiagram.py ./rte/filelist.f 2 --top subsystem_top
 ```
 
 Label rules:
@@ -37,7 +37,7 @@ Outputs:
 Output paths can be overridden:
 
 ```bash
-python3 rtl_datapath_visualizer.py ./rte/filelist.f 3 \
+python3 RTL_blockdiagram.py ./rte/filelist.f 3 \
   --out hierarchy.dot \
   --png hierarchy.png \
   --excalidraw hierarchy.excalidraw

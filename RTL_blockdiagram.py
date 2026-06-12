@@ -467,7 +467,7 @@ def emit_excalidraw(design: Design, depth_limit: int = 0, show_instances: bool =
     scene = {
         "type": "excalidraw",
         "version": 2,
-        "source": "rtl_datapath_visualizer.py",
+        "source": "RTL_blockdiagram.py",
         "elements": elements,
         "appState": {
             "gridSize": None,
