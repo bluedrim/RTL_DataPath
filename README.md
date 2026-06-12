@@ -2,7 +2,7 @@
 
 Generate editable RTL hierarchy block diagrams from a Verilog/SystemVerilog filelist.
 
-`rtl_datapath_visualizer.py` reads an `rte`-style `.f` filelist, infers the TOP module, and draws the module hierarchy below TOP. A numeric depth controls how many instance levels are shown.
+`rtl_datapath_visualizer.py` reads an `rte`-style `.f` filelist, infers the TOP module, and draws a nested containment diagram. TOP is the outermost block, direct child instances are placed inside it, and each deeper hierarchy level gets a slightly different color. A numeric depth controls how many instance levels are shown.
 
 ## Usage
 
@@ -18,7 +18,7 @@ Depth rules:
 
 Outputs:
 
-- `rtl_datapath.dot`: Graphviz DOT source.
+- `rtl_datapath.dot`: Graphviz DOT source using nested clusters.
 - `rtl_datapath.png`: generated when Graphviz `dot` is installed.
 - `rtl_datapath.excalidraw`: editable Excalidraw-compatible block diagram.
 

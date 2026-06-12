@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate an RTL module hierarchy + datapath-highlight block diagram from a filelist."""
+"""Generate a nested RTL hierarchy block diagram from a filelist."""
 
 from __future__ import annotations
 
@@ -46,6 +46,23 @@ DATAPATH_KEYWORDS = {
     "lane",
 }
 
+DEPTH_PALETTE = [
+    ("#DCEBFA", "#2F5E8E"),
+    ("#E5F2D7", "#4B7F35"),
+    ("#FDE8C9", "#A45A13"),
+    ("#E9E0F7", "#6D4BA3"),
+    ("#DDF2EF", "#337A73"),
+    ("#F7DDE7", "#9B4164"),
+    ("#E7E9F0", "#5B6476"),
+]
+
+NODE_MIN_WIDTH = 240
+NODE_MIN_HEIGHT = 84
+HEADER_HEIGHT = 54
+CONTAINER_PAD = 22
+CHILD_GAP = 18
+MAX_CHILD_COLUMNS = 3
+
 
 @dataclass
 class Module:
@@ -60,6 +77,17 @@ class Design:
     modules: Dict[str, Module]
     top: str
     top_candidates: List[str] = field(default_factory=list)
+
+
+@dataclass
+class HierarchyNode:
+    module_name: str
+    inst_name: str | None
+    depth: int
+    path: Tuple[str, ...]
+    children: List["HierarchyNode"] = field(default_factory=list)
+    width: float = 0
+    height: float = 0
 
 
 def strip_comments(text: str) -> str:
@@ -184,30 +212,104 @@ def is_datapath_name(text: str) -> bool:
     return any(k in low for k in DATAPATH_KEYWORDS)
 
 
-def module_style(design: Design, name: str) -> Tuple[str, str, str]:
+def module_style(design: Design, name: str, depth: int) -> Tuple[str, str, int]:
     mod = design.modules[name]
+    fill, border = DEPTH_PALETTE[depth % len(DEPTH_PALETTE)]
     if name == design.top:
-        return "#BBDEFB", "#1565C0", "2"
+        return fill, "#174A7C", 3
     if is_datapath_name(name) or any(is_datapath_name(p) for p in mod.ports):
-        return "#FFE0B2", "#EF6C00", "2"
-    return "#ECEFF1", "#607D8B", "1"
+        return fill, border, 2
+    return fill, border, 1
 
 
-def visible_module_names(visible_depths: Dict[str, int]) -> List[str]:
-    return sorted(visible_depths, key=lambda n: (visible_depths[n], n))
+def build_hierarchy_tree(design: Design, depth_limit: int = 0) -> HierarchyNode:
+    if depth_limit < 0:
+        raise ValueError("depth_limit must be 0 or greater")
+
+    unlimited = depth_limit == 0
+
+    def expand(
+        module_name: str,
+        inst_name: str | None,
+        depth: int,
+        path: Tuple[str, ...],
+        ancestry: Set[str],
+    ) -> HierarchyNode:
+        node = HierarchyNode(module_name=module_name, inst_name=inst_name, depth=depth, path=path)
+        if not unlimited and depth >= depth_limit:
+            return node
+
+        for index, (child_module, child_inst) in enumerate(design.modules[module_name].instances):
+            if child_module not in design.modules or child_module in ancestry:
+                continue
+            child_path = path + (f"{index}:{child_inst}:{child_module}",)
+            node.children.append(
+                expand(child_module, child_inst, depth + 1, child_path, ancestry | {child_module})
+            )
+
+        return node
+
+    return expand(design.top, None, 0, (design.top,), {design.top})
 
 
-def visible_edges(design: Design, visible_depths: Dict[str, int]) -> List[Tuple[str, str, str]]:
-    visible_modules = set(visible_depths)
-    edges: List[Tuple[str, str, str]] = []
+def count_hierarchy_nodes(node: HierarchyNode) -> int:
+    return 1 + sum(count_hierarchy_nodes(child) for child in node.children)
 
-    for parent in visible_module_names(visible_depths):
-        mod = design.modules[parent]
-        for child, inst in mod.instances:
-            if child in visible_modules:
-                edges.append((parent, child, inst))
 
-    return edges
+def hierarchy_label(node: HierarchyNode) -> str:
+    if node.inst_name is None:
+        return f"TOP: {node.module_name}"
+    return f"{node.inst_name}\n{node.module_name}"
+
+
+def child_rows(children: List[HierarchyNode]) -> List[List[HierarchyNode]]:
+    if not children:
+        return []
+    columns = min(MAX_CHILD_COLUMNS, len(children))
+    return [children[index : index + columns] for index in range(0, len(children), columns)]
+
+
+def compute_hierarchy_layout(node: HierarchyNode) -> Tuple[float, float]:
+    if not node.children:
+        node.width = NODE_MIN_WIDTH
+        node.height = NODE_MIN_HEIGHT
+        return node.width, node.height
+
+    for child in node.children:
+        compute_hierarchy_layout(child)
+
+    rows = child_rows(node.children)
+    row_widths = [
+        sum(child.width for child in row) + CHILD_GAP * (len(row) - 1)
+        for row in rows
+    ]
+    row_heights = [max(child.height for child in row) for row in rows]
+    content_width = max(row_widths) if row_widths else 0
+    content_height = sum(row_heights) + CHILD_GAP * (len(row_heights) - 1)
+
+    node.width = max(NODE_MIN_WIDTH, content_width + CONTAINER_PAD * 2)
+    node.height = max(
+        NODE_MIN_HEIGHT,
+        HEADER_HEIGHT + CONTAINER_PAD + content_height + CONTAINER_PAD,
+    )
+    return node.width, node.height
+
+
+def place_hierarchy(node: HierarchyNode, x: float, y: float, positions: Dict[Tuple[str, ...], Tuple[float, float]]) -> None:
+    positions[node.path] = (x, y)
+    if not node.children:
+        return
+
+    rows = child_rows(node.children)
+    row_y = y + HEADER_HEIGHT + CONTAINER_PAD
+    for row in rows:
+        row_width = sum(child.width for child in row) + CHILD_GAP * (len(row) - 1)
+        row_height = max(child.height for child in row)
+        child_x = x + (node.width - row_width) / 2
+        for child in row:
+            place_hierarchy(child, child_x, row_y, positions)
+            child_x += child.width + CHILD_GAP
+        row_y += row_height + CHILD_GAP
 
 
 def build_design(filelist: Path, explicit_top: str | None) -> Design:
@@ -238,34 +340,34 @@ def dot_escape(text: str) -> str:
 
 
 def emit_dot(design: Design, depth_limit: int = 0) -> str:
-    visible_depths = reachable_module_depths(design.modules, design.top, depth_limit)
+    tree = build_hierarchy_tree(design, depth_limit)
 
     lines = [
         "digraph RTL {",
-        '  rankdir="LR";',
-        '  graph [fontname="Helvetica"];',
-        '  node [shape=box, style="rounded,filled", fillcolor="#ECEFF1", color="#607D8B", fontname="Helvetica"];',
-        '  edge [color="#546E7A", fontname="Helvetica", fontsize=10];',
+        '  graph [fontname="Helvetica", bgcolor="white", labeljust="l", labelloc="t"];',
+        '  node [shape=point, style=invis, width=0.01, height=0.01, label=""];',
     ]
 
-    for name in visible_module_names(visible_depths):
-        mod = design.modules[name]
-        fill, border, penwidth = module_style(design, name)
+    def add_cluster(node: HierarchyNode, indent: int) -> None:
+        prefix = "  " * indent
+        cluster_id = f"cluster_{stable_int(*node.path, 'cluster'):08x}"
+        anchor_id = f"anchor_{stable_int(*node.path, 'anchor'):08x}"
+        fill, border, penwidth = module_style(design, node.module_name, node.depth)
+        label = dot_escape(hierarchy_label(node))
 
-        label = dot_escape(f"{name}\n({mod.file.name})")
-        lines.append(
-            f'  "{name}" [label="{label}", fillcolor="{fill}", color="{border}", penwidth={penwidth}];'
-        )
+        lines.append(f'{prefix}subgraph "{cluster_id}" {{')
+        lines.append(f'{prefix}  label="{label}";')
+        lines.append(f'{prefix}  style="rounded,filled";')
+        lines.append(f'{prefix}  fillcolor="{fill}";')
+        lines.append(f'{prefix}  color="{border}";')
+        lines.append(f'{prefix}  penwidth={penwidth};')
+        lines.append(f'{prefix}  fontname="Helvetica";')
+        lines.append(f'{prefix}  "{anchor_id}";')
+        for child in node.children:
+            add_cluster(child, indent + 1)
+        lines.append(f"{prefix}}}")
 
-    for parent, child, inst in visible_edges(design, visible_depths):
-        edge_color = "#546E7A"
-        penwidth = "1"
-        if is_datapath_name(parent) or is_datapath_name(child) or is_datapath_name(inst):
-            edge_color = "#D84315"
-            penwidth = "2"
-        lines.append(
-            f'  "{parent}" -> "{child}" [label="{dot_escape(inst)}", color="{edge_color}", penwidth={penwidth}];'
-        )
+    add_cluster(tree, 1)
 
     lines.append("}")
     return "\n".join(lines) + "\n"
@@ -307,127 +409,59 @@ def excalidraw_base_element(element_id: str, element_type: str, x: float, y: flo
 
 
 def emit_excalidraw(design: Design, depth_limit: int = 0) -> str:
-    visible_depths = reachable_module_depths(design.modules, design.top, depth_limit)
-    modules_by_depth: Dict[int, List[str]] = {}
-    for name, depth in visible_depths.items():
-        modules_by_depth.setdefault(depth, []).append(name)
-
-    node_width = 220
-    node_height = 76
-    x_gap = 330
-    y_gap = 130
-    x_origin = 60
-    y_origin = 60
-
-    positions: Dict[str, Tuple[float, float]] = {}
+    tree = build_hierarchy_tree(design, depth_limit)
+    compute_hierarchy_layout(tree)
+    node_positions: Dict[Tuple[str, ...], Tuple[float, float]] = {}
+    place_hierarchy(tree, 60, 60, node_positions)
     elements: List[Dict[str, Any]] = []
 
-    for depth in sorted(modules_by_depth):
-        names = sorted(modules_by_depth[depth])
-        column_height = (len(names) - 1) * y_gap
-        y_offset = -column_height / 2 if depth == 0 else 0
-        for index, name in enumerate(names):
-            mod = design.modules[name]
-            x = x_origin + depth * x_gap
-            y = y_origin + y_offset + index * y_gap
-            positions[name] = (x, y)
-            fill, border, penwidth = module_style(design, name)
-            rect_id = f"module-{stable_int(name, 'rect'):08x}"
-            text_id = f"text-{stable_int(name, 'text'):08x}"
+    def append_node(node: HierarchyNode) -> None:
+        x, y = node_positions[node.path]
+        fill, border, penwidth = module_style(design, node.module_name, node.depth)
+        rect_id = f"module-{stable_int(*node.path, 'rect'):08x}"
+        text_id = f"text-{stable_int(*node.path, 'text'):08x}"
+        font_size = 20 if node.depth == 0 else 16
+        label = hierarchy_label(node)
 
-            rect = excalidraw_base_element(rect_id, "rectangle", x, y)
-            rect.update(
-                {
-                    "width": node_width,
-                    "height": node_height,
-                    "strokeColor": border,
-                    "backgroundColor": fill,
-                    "strokeWidth": int(penwidth),
-                    "roundness": {"type": 3},
-                    "boundElements": [],
-                }
-            )
-            elements.append(rect)
-
-            label = f"{name}\n({mod.file.name})"
-            text = excalidraw_base_element(text_id, "text", x + 10, y + 14)
-            text.update(
-                {
-                    "width": node_width - 20,
-                    "height": 48,
-                    "strokeColor": "#1e1e1e",
-                    "roughness": 0,
-                    "fontSize": 18,
-                    "fontFamily": 1,
-                    "text": label,
-                    "rawText": label,
-                    "textAlign": "center",
-                    "verticalAlign": "middle",
-                    "baseline": 41,
-                    "containerId": None,
-                    "originalText": label,
-                    "lineHeight": 1.25,
-                }
-            )
-            elements.append(text)
-
-    for index, (parent, child, inst) in enumerate(visible_edges(design, visible_depths)):
-        parent_x, parent_y = positions[parent]
-        child_x, child_y = positions[child]
-        start_x = parent_x + node_width
-        start_y = parent_y + node_height / 2
-        end_x = child_x
-        end_y = child_y + node_height / 2
-        arrow_id = f"edge-{stable_int(parent, child, inst, str(index)):08x}"
-        edge_color = "#546E7A"
-        stroke_width = 1
-        if is_datapath_name(parent) or is_datapath_name(child) or is_datapath_name(inst):
-            edge_color = "#D84315"
-            stroke_width = 2
-
-        arrow = excalidraw_base_element(arrow_id, "arrow", start_x, start_y)
-        arrow.update(
+        rect = excalidraw_base_element(rect_id, "rectangle", x, y)
+        rect.update(
             {
-                "width": end_x - start_x,
-                "height": end_y - start_y,
-                "strokeColor": edge_color,
-                "strokeWidth": stroke_width,
-                "roundness": {"type": 2},
-                "points": [[0, 0], [end_x - start_x, end_y - start_y]],
-                "lastCommittedPoint": None,
-                "startBinding": None,
-                "endBinding": None,
-                "startArrowhead": None,
-                "endArrowhead": "arrow",
+                "width": node.width,
+                "height": node.height,
+                "strokeColor": border,
+                "backgroundColor": fill,
+                "strokeWidth": penwidth,
+                "roundness": {"type": 3},
+                "boundElements": [],
             }
         )
-        elements.append(arrow)
+        elements.append(rect)
 
-        if inst:
-            label_x = start_x + (end_x - start_x) / 2 - 45
-            label_y = start_y + (end_y - start_y) / 2 - 26
-            label_id = f"edge-label-{stable_int(parent, child, inst, str(index)):08x}"
-            label = excalidraw_base_element(label_id, "text", label_x, label_y)
-            label.update(
-                {
-                    "width": 90,
-                    "height": 22,
-                    "strokeColor": edge_color,
-                    "backgroundColor": "#ffffff",
-                    "roughness": 0,
-                    "fontSize": 14,
-                    "fontFamily": 1,
-                    "text": inst,
-                    "rawText": inst,
-                    "textAlign": "center",
-                    "verticalAlign": "middle",
-                    "baseline": 17,
-                    "containerId": None,
-                    "originalText": inst,
-                    "lineHeight": 1.25,
-                }
-            )
-            elements.append(label)
+        text = excalidraw_base_element(text_id, "text", x + 14, y + 14)
+        text.update(
+            {
+                "width": max(120, node.width - 28),
+                "height": 32 if "\n" not in label else 44,
+                "strokeColor": "#1e1e1e",
+                "roughness": 0,
+                "fontSize": font_size,
+                "fontFamily": 1,
+                "text": label,
+                "rawText": label,
+                "textAlign": "left",
+                "verticalAlign": "top",
+                "baseline": font_size + 4,
+                "containerId": None,
+                "originalText": label,
+                "lineHeight": 1.2,
+            }
+        )
+        elements.append(text)
+
+        for child in node.children:
+            append_node(child)
+
+    append_node(tree)
 
     scene = {
         "type": "excalidraw",
@@ -453,7 +487,7 @@ def maybe_render_png(dot_file: Path, png_file: Path) -> bool:
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Read an RTL filelist and generate module hierarchy/datapath-highlight diagram"
+        description="Read an RTL filelist and generate a nested module hierarchy block diagram"
     )
     parser.add_argument("filelist", type=Path, help="Path to rte/filelist.f style file list")
     parser.add_argument(
@@ -492,7 +526,8 @@ def main() -> None:
         parser.error("depth must be 0 or greater")
 
     design = build_design(args.filelist, args.top)
-    visible_depths = reachable_module_depths(design.modules, design.top, depth_limit)
+    tree = build_hierarchy_tree(design, depth_limit)
+    drawn_block_count = count_hierarchy_nodes(tree)
     dot = emit_dot(design, depth_limit)
     args.out.write_text(dot, encoding="utf-8")
     excalidraw = emit_excalidraw(design, depth_limit)
@@ -506,7 +541,7 @@ def main() -> None:
     depth_text = "all" if depth_limit == 0 else str(depth_limit)
     print(f"[INFO] depth: {depth_text}")
     print(f"[INFO] parsed module count: {len(design.modules)}")
-    print(f"[INFO] drawn module count: {len(visible_depths)}")
+    print(f"[INFO] drawn block count: {drawn_block_count}")
 
     try:
         rendered = maybe_render_png(args.out, args.png)
