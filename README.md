@@ -20,8 +20,13 @@ Depth rules:
 Example with an explicit root module:
 
 ```bash
-python3 rtl_datapath_visualizer.py ./rte/filelist.f 2 --top u_subsystem_top
+python3 rtl_datapath_visualizer.py ./rte/filelist.f 2 --top subsystem_top
 ```
+
+Label rules:
+
+- By default, blocks show module names only.
+- Use `--show-instances` to show instance names above module names.
 
 Outputs:
 
