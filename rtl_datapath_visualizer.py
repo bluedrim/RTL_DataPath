@@ -77,6 +77,7 @@ class Design:
     modules: Dict[str, Module]
     top: str
     top_candidates: List[str] = field(default_factory=list)
+    top_is_explicit: bool = False
 
 
 @dataclass
@@ -262,6 +263,11 @@ def hierarchy_label(node: HierarchyNode) -> str:
     return f"{node.inst_name}\n{node.module_name}"
 
 
+def root_label(design: Design) -> str:
+    label = "ROOT" if design.top_is_explicit else "TOP"
+    return f"{label}: {design.top}"
+
+
 def child_rows(children: List[HierarchyNode]) -> List[List[HierarchyNode]]:
     if not children:
         return []
@@ -332,7 +338,7 @@ def build_design(filelist: Path, explicit_top: str | None) -> Design:
     if top not in modules:
         raise ValueError(f"Top module '{top}' not found in parsed modules.")
 
-    return Design(modules=modules, top=top, top_candidates=top_candidates)
+    return Design(modules=modules, top=top, top_candidates=top_candidates, top_is_explicit=bool(explicit_top))
 
 
 def dot_escape(text: str) -> str:
@@ -353,7 +359,7 @@ def emit_dot(design: Design, depth_limit: int = 0) -> str:
         cluster_id = f"cluster_{stable_int(*node.path, 'cluster'):08x}"
         anchor_id = f"anchor_{stable_int(*node.path, 'anchor'):08x}"
         fill, border, penwidth = module_style(design, node.module_name, node.depth)
-        label = dot_escape(hierarchy_label(node))
+        label = dot_escape(root_label(design) if node.depth == 0 else hierarchy_label(node))
 
         lines.append(f'{prefix}subgraph "{cluster_id}" {{')
         lines.append(f'{prefix}  label="{label}";')
@@ -421,7 +427,7 @@ def emit_excalidraw(design: Design, depth_limit: int = 0) -> str:
         rect_id = f"module-{stable_int(*node.path, 'rect'):08x}"
         text_id = f"text-{stable_int(*node.path, 'text'):08x}"
         font_size = 20 if node.depth == 0 else 16
-        label = hierarchy_label(node)
+        label = root_label(design) if node.depth == 0 else hierarchy_label(node)
 
         rect = excalidraw_base_element(rect_id, "rectangle", x, y)
         rect.update(
@@ -497,7 +503,12 @@ def main() -> None:
         default=None,
         help="Optional hierarchy depth below top. 0 draws all modules reachable from top.",
     )
-    parser.add_argument("--top", type=str, default=None, help="Top module name (optional)")
+    parser.add_argument(
+        "--top",
+        type=str,
+        default=None,
+        help="Module to use as the diagram root. Defaults to the inferred full-design TOP.",
+    )
     parser.add_argument(
         "--depth",
         dest="depth_option",
@@ -535,7 +546,8 @@ def main() -> None:
 
     print(f"[OK] DOT generated: {args.out}")
     print(f"[OK] Excalidraw generated: {args.excalidraw}")
-    print(f"[INFO] top module: {design.top}")
+    root_source = "explicit" if design.top_is_explicit else "inferred"
+    print(f"[INFO] diagram root: {design.top} ({root_source})")
     if not args.top and len(design.top_candidates) > 1:
         print(f"[INFO] top candidates: {', '.join(design.top_candidates)}")
     depth_text = "all" if depth_limit == 0 else str(depth_limit)
