@@ -65,7 +65,8 @@ Trace behavior:
 - Follows named instance port connections, continuous `assign`, and simple procedural assignments.
 - Continues through renames such as `assign stage_data = i_data`.
 - Stops and prints a stop record when the signal enters conditional logic such as `if`, `case`, or a conditional procedural assignment.
-- Prints path summaries as `[PATH_0]`, `[PATH_1]`, and so on; console output also prints `MAIN` last.
+- Selects `MAIN` by preferring paths that reach output ports with signal names similar to the input.
+- Prints path summaries as `[PATH_0]`, `[PATH_1]`, and so on; console output also prints `MAIN` and `LONGEST` at the end.
 - Wraps each path block with `//{{{ <final_signal>` and `//}}}` fold markers.
 - Writes the path-only summary to `trace_<input_signal>.txt`.
 - Writes `rtl_datapath_trace.excalidraw`, showing the main path with arrows and signal rename labels.

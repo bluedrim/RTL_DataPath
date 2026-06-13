@@ -148,6 +148,7 @@ class TraceResult:
     terminal_refs: List[SignalRef]
     stop_edges: List[TraceEdge]
     main_path: List[TraceEdge]
+    longest_path: List[TraceEdge]
     all_paths: List[List[TraceEdge]]
 
 
@@ -542,6 +543,76 @@ def connected_expr_signal(expr: str) -> List[str]:
     return expression_signals(expr)
 
 
+SIMILARITY_IGNORE_TOKENS = {
+    "d",
+    "i",
+    "in",
+    "input",
+    "nxt",
+    "next",
+    "o",
+    "out",
+    "output",
+    "q",
+    "r",
+    "reg",
+    "wire",
+}
+
+
+def signal_name_tokens(signal: str) -> Set[str]:
+    tokens: Set[str] = set()
+    for part in re.split(r"[^A-Za-z0-9]+", base_signal(signal).lower()):
+        if not part:
+            continue
+        for token in re.findall(r"[a-z]+|[0-9]+", part):
+            if token and token not in SIMILARITY_IGNORE_TOKENS:
+                tokens.add(token)
+    return tokens
+
+
+def signal_name_similarity(left: str, right: str) -> float:
+    if base_signal(left) == base_signal(right):
+        return 1.0
+    left_tokens = signal_name_tokens(left)
+    right_tokens = signal_name_tokens(right)
+    if not left_tokens or not right_tokens:
+        return 0.0
+    return len(left_tokens & right_tokens) / len(left_tokens | right_tokens)
+
+
+def ref_direction(design: Design, ref: SignalRef) -> str:
+    module = design.modules.get(ref.module_name)
+    if not module:
+        return "unknown"
+    return module.port_directions.get(ref.signal, "unknown")
+
+
+def path_score(design: Design, root: HierNode, start: SignalRef, path: List[TraceEdge]) -> Tuple[int, int, int, int, int]:
+    refs = refs_for_path(start, path)
+    terminal = refs[-1]
+    direction = ref_direction(design, terminal)
+    if direction in {"output", "inout"} and terminal.path == root.path:
+        output_rank = 3
+    elif direction in {"output", "inout"}:
+        output_rank = 2
+    else:
+        output_rank = 0
+    final_similarity = int(signal_name_similarity(start.signal, terminal.signal) * 1000)
+    best_output_similarity = max(
+        (signal_name_similarity(start.signal, ref.signal) for ref in refs if ref_direction(design, ref) in {"output", "inout"}),
+        default=0.0,
+    )
+    clean_rank = 0 if any(edge.stopped for edge in path) else 1
+    return (
+        output_rank,
+        int(best_output_similarity * 1000),
+        final_similarity,
+        clean_rank,
+        len(path),
+    )
+
+
 def trace_datapath(design: Design, root: HierNode, start: SignalRef, max_steps: int = 1000) -> TraceResult:
     queue: deque[Tuple[SignalRef, List[TraceEdge]]] = deque([(start, [])])
     visited: Set[Tuple[Tuple[str, ...], str]] = set()
@@ -652,13 +723,15 @@ def trace_datapath(design: Design, root: HierNode, start: SignalRef, max_steps: 
         seen_path_keys.add(path_key)
         unique_paths.append(path)
 
-    main_path = max(unique_paths, key=len) if unique_paths else []
+    main_path = max(unique_paths, key=lambda path: path_score(design, root, start, path)) if unique_paths else []
+    longest_path = max(unique_paths, key=len) if unique_paths else []
     return TraceResult(
         start=start,
         edges=edges,
         terminal_refs=terminal_refs,
         stop_edges=stop_edges,
         main_path=main_path,
+        longest_path=longest_path,
         all_paths=unique_paths,
     )
 
@@ -847,9 +920,9 @@ def path_summary_lines(result: TraceResult) -> List[str]:
     return lines
 
 
-def main_summary_lines(result: TraceResult, color: bool = False) -> List[str]:
-    label = f"{BLUE}MAIN{RESET}" if color else "MAIN"
-    refs = refs_for_path(result.start, result.main_path)
+def named_path_summary_lines(result: TraceResult, name: str, path: List[TraceEdge], color: bool = False) -> List[str]:
+    label = f"{BLUE}{name}{RESET}" if color else name
+    refs = refs_for_path(result.start, path)
     lines: List[str] = []
     append_folded_block(
         lines,
@@ -897,7 +970,11 @@ def main() -> None:
         "\n".join(path_lines) + "\n",
         encoding="utf-8",
     )
-    print_lines(path_lines + main_summary_lines(result, color=True))
+    print_lines(
+        path_lines
+        + named_path_summary_lines(result, "MAIN", result.main_path, color=True)
+        + named_path_summary_lines(result, "LONGEST", result.longest_path, color=True)
+    )
 
 
 if __name__ == "__main__":
