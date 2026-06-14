@@ -348,6 +348,14 @@ def dot_cluster_id(node: HierarchyNode) -> str:
     return f"cluster_{stable_int(*node.path, 'cluster'):08x}"
 
 
+def dot_row_cluster_id(node: HierarchyNode, row_index: int) -> str:
+    return f"cluster_row_{stable_int(*node.path, str(row_index), 'cluster'):08x}"
+
+
+def dot_row_anchor_id(node: HierarchyNode, row_index: int) -> str:
+    return f"row_anchor_{stable_int(*node.path, str(row_index), 'anchor'):08x}"
+
+
 def emit_dot(design: Design, depth_limit: int = 0, show_instances: bool = False) -> str:
     tree = build_hierarchy_tree(design, depth_limit)
 
@@ -372,19 +380,23 @@ def emit_dot(design: Design, depth_limit: int = 0, show_instances: bool = False)
         lines.append(f'{prefix}  penwidth={penwidth};')
         lines.append(f'{prefix}  fontname="Helvetica";')
         lines.append(f'{prefix}  "{anchor_id}";')
-        for child in node.children:
-            add_cluster(child, indent + 1)
         rows = child_rows(node.children)
-        for row in rows:
-            anchors = [dot_anchor_id(child) for child in row]
-            if len(anchors) > 1:
-                same_rank = " ".join(f'"{anchor}";' for anchor in anchors)
-                lines.append(f"{prefix}  {{ rank=same; {same_rank} }}")
-                for left, right in zip(anchors, anchors[1:]):
-                    lines.append(f'{prefix}  "{left}" -> "{right}" [style=invis, weight=100];')
-        for upper, lower in zip(rows, rows[1:]):
+        for row_index, row in enumerate(rows):
+            row_cluster_id = dot_row_cluster_id(node, row_index)
+            row_anchor_id = dot_row_anchor_id(node, row_index)
+            lines.append(f'{prefix}  subgraph "{row_cluster_id}" {{')
+            lines.append(f'{prefix}    label="";')
+            lines.append(f'{prefix}    color="white";')
+            lines.append(f'{prefix}    penwidth=0;')
+            lines.append(f'{prefix}    margin=0;')
+            lines.append(f'{prefix}    "{row_anchor_id}";')
+            for child in row:
+                add_cluster(child, indent + 2)
+            lines.append(f"{prefix}  }}")
+        for row_index in range(len(rows) - 1):
             lines.append(
-                f'{prefix}  "{dot_anchor_id(upper[0])}" -> "{dot_anchor_id(lower[0])}" '
+                f'{prefix}  "{dot_row_anchor_id(node, row_index)}" -> '
+                f'"{dot_row_anchor_id(node, row_index + 1)}" '
                 '[style=invis, weight=100];'
             )
         lines.append(f"{prefix}}}")
