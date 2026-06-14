@@ -562,7 +562,8 @@ def visio_shape_xml(
     line_weight = max(0.01, 0.01 * penwidth)
     font_size = 0.24 if node.depth == 0 else 0.18
     text_height = 0.45 if "\n" not in label else 0.62
-    return f"""    <Shape ID="{shape_id}" NameU="{xml_escape(node.module_name)}" Type="Shape" LineStyle="0" FillStyle="0" TextStyle="0">
+    shape_name = xml_escape(f"{node.module_name}_{shape_id}")
+    return f"""    <Shape ID="{shape_id}" Name="{xml_escape(node.module_name)}" NameU="{shape_name}" Type="Shape" LineStyle="0" FillStyle="0" TextStyle="0">
       <Cell N="PinX" V="{visio_number(pin_x)}"/>
       <Cell N="PinY" V="{visio_number(pin_y)}"/>
       <Cell N="Width" V="{visio_number(width)}"/>
@@ -587,6 +588,32 @@ def visio_shape_xml(
       <Section N="Paragraph">
         <Row IX="0">
           <Cell N="HorzAlign" V="0"/>
+        </Row>
+      </Section>
+      <Section N="Geometry" IX="0">
+        <Cell N="NoFill" V="0"/>
+        <Cell N="NoLine" V="0"/>
+        <Cell N="NoShow" V="0"/>
+        <Cell N="NoSnap" V="0"/>
+        <Row T="MoveTo" IX="1">
+          <Cell N="X" V="0"/>
+          <Cell N="Y" V="0"/>
+        </Row>
+        <Row T="LineTo" IX="2">
+          <Cell N="X" V="{visio_number(width)}"/>
+          <Cell N="Y" V="0"/>
+        </Row>
+        <Row T="LineTo" IX="3">
+          <Cell N="X" V="{visio_number(width)}"/>
+          <Cell N="Y" V="{visio_number(height)}"/>
+        </Row>
+        <Row T="LineTo" IX="4">
+          <Cell N="X" V="0"/>
+          <Cell N="Y" V="{visio_number(height)}"/>
+        </Row>
+        <Row T="LineTo" IX="5">
+          <Cell N="X" V="0"/>
+          <Cell N="Y" V="0"/>
         </Row>
       </Section>
       <Text>{label}</Text>
@@ -639,7 +666,7 @@ def visio_package_parts(page_xml: str) -> Dict[str, str]:
 """,
         "_rels/.rels": """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
-  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="visio/document.xml"/>
+  <Relationship Id="rId1" Type="http://schemas.microsoft.com/visio/2010/relationships/document" Target="visio/document.xml"/>
   <Relationship Id="rId2" Type="http://schemas.openxmlformats.org/package/2006/relationships/metadata/core-properties" Target="docProps/core.xml"/>
   <Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/extended-properties" Target="docProps/app.xml"/>
 </Relationships>
@@ -699,7 +726,9 @@ def visio_package_parts(page_xml: str) -> Dict[str, str]:
 """,
         "visio/pages/pages.xml": """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Pages xmlns="http://schemas.microsoft.com/office/visio/2012/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
-  <Page ID="0" Name="Page-1" NameU="Page-1" IsCustomName="1" IsCustomNameU="1" Rel="rId1"/>
+  <Page ID="0" Name="Page-1" NameU="Page-1" IsCustomName="1" IsCustomNameU="1">
+    <Rel r:id="rId1"/>
+  </Page>
 </Pages>
 """,
         "visio/pages/_rels/pages.xml.rels": """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
