@@ -31,6 +31,7 @@ Label rules:
 Layout rules:
 
 - Child blocks are wrapped after 4 modules per row, then continue on the next row.
+- Each next row starts below the tallest block in the previous row, with additional vertical spacing.
 
 Outputs:
 

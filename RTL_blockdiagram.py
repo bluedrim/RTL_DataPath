@@ -61,6 +61,7 @@ NODE_MIN_HEIGHT = 84
 HEADER_HEIGHT = 54
 CONTAINER_PAD = 22
 CHILD_GAP = 18
+ROW_GAP = 72
 MAX_CHILD_COLUMNS = 4
 
 
@@ -270,6 +271,14 @@ def child_rows(children: List[HierarchyNode]) -> List[List[HierarchyNode]]:
     return [children[index : index + columns] for index in range(0, len(children), columns)]
 
 
+def row_width(row: List[HierarchyNode]) -> float:
+    return sum(child.width for child in row) + CHILD_GAP * (len(row) - 1)
+
+
+def row_height(row: List[HierarchyNode]) -> float:
+    return max(child.height for child in row)
+
+
 def compute_hierarchy_layout(node: HierarchyNode) -> Tuple[float, float]:
     if not node.children:
         node.width = NODE_MIN_WIDTH
@@ -280,13 +289,10 @@ def compute_hierarchy_layout(node: HierarchyNode) -> Tuple[float, float]:
         compute_hierarchy_layout(child)
 
     rows = child_rows(node.children)
-    row_widths = [
-        sum(child.width for child in row) + CHILD_GAP * (len(row) - 1)
-        for row in rows
-    ]
-    row_heights = [max(child.height for child in row) for row in rows]
+    row_widths = [row_width(row) for row in rows]
+    row_heights = [row_height(row) for row in rows]
     content_width = max(row_widths) if row_widths else 0
-    content_height = sum(row_heights) + CHILD_GAP * (len(row_heights) - 1)
+    content_height = sum(row_heights) + ROW_GAP * (len(row_heights) - 1)
 
     node.width = max(NODE_MIN_WIDTH, content_width + CONTAINER_PAD * 2)
     node.height = max(
@@ -304,13 +310,13 @@ def place_hierarchy(node: HierarchyNode, x: float, y: float, positions: Dict[Tup
     rows = child_rows(node.children)
     row_y = y + HEADER_HEIGHT + CONTAINER_PAD
     for row in rows:
-        row_width = sum(child.width for child in row) + CHILD_GAP * (len(row) - 1)
-        row_height = max(child.height for child in row)
-        child_x = x + (node.width - row_width) / 2
+        width = row_width(row)
+        height = row_height(row)
+        child_x = x + (node.width - width) / 2
         for child in row:
             place_hierarchy(child, child_x, row_y, positions)
             child_x += child.width + CHILD_GAP
-        row_y += row_height + CHILD_GAP
+        row_y += height + ROW_GAP
 
 
 def build_design(filelist: Path, explicit_top: str | None) -> Design:
@@ -356,12 +362,17 @@ def dot_row_anchor_id(node: HierarchyNode, row_index: int) -> str:
     return f"row_anchor_{stable_int(*node.path, str(row_index), 'anchor'):08x}"
 
 
+def dot_row_minlen(row: List[HierarchyNode]) -> int:
+    return max(3, int(row_height(row) / NODE_MIN_HEIGHT) + 1)
+
+
 def emit_dot(design: Design, depth_limit: int = 0, show_instances: bool = False) -> str:
     tree = build_hierarchy_tree(design, depth_limit)
+    compute_hierarchy_layout(tree)
 
     lines = [
         "digraph RTL {",
-        '  graph [fontname="Helvetica", bgcolor="white", labeljust="l", labelloc="t"];',
+        '  graph [fontname="Helvetica", bgcolor="white", labeljust="l", labelloc="t", ranksep="1.0"];',
         '  node [shape=point, style=invis, width=0.01, height=0.01, label=""];',
     ]
 
@@ -394,10 +405,11 @@ def emit_dot(design: Design, depth_limit: int = 0, show_instances: bool = False)
                 add_cluster(child, indent + 2)
             lines.append(f"{prefix}  }}")
         for row_index in range(len(rows) - 1):
+            minlen = dot_row_minlen(rows[row_index])
             lines.append(
                 f'{prefix}  "{dot_row_anchor_id(node, row_index)}" -> '
                 f'"{dot_row_anchor_id(node, row_index + 1)}" '
-                '[style=invis, weight=100];'
+                f'[style=invis, weight=100, minlen={minlen}];'
             )
         lines.append(f"{prefix}}}")
 
