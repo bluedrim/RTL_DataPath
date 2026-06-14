@@ -1,0 +1,8 @@
+__pycache__/
+*.py[cod]
+.DS_Store
+.env
+
+rtl_datapath.dot
+rtl_datapath.png
+rtl_datapath.excalidraw
