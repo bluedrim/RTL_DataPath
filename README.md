@@ -28,6 +28,10 @@ Label rules:
 - By default, blocks show module names only.
 - Use `--show-instances` to show instance names above module names.
 
+Layout rules:
+
+- Child blocks are wrapped after 4 modules per row, then continue on the next row.
+
 Outputs:
 
 - `rtl_datapath.dot`: Graphviz DOT source using nested clusters.

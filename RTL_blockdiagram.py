@@ -61,7 +61,7 @@ NODE_MIN_HEIGHT = 84
 HEADER_HEIGHT = 54
 CONTAINER_PAD = 22
 CHILD_GAP = 18
-MAX_CHILD_COLUMNS = 3
+MAX_CHILD_COLUMNS = 4
 
 
 @dataclass
@@ -340,6 +340,14 @@ def dot_escape(text: str) -> str:
     return text.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n")
 
 
+def dot_anchor_id(node: HierarchyNode) -> str:
+    return f"anchor_{stable_int(*node.path, 'anchor'):08x}"
+
+
+def dot_cluster_id(node: HierarchyNode) -> str:
+    return f"cluster_{stable_int(*node.path, 'cluster'):08x}"
+
+
 def emit_dot(design: Design, depth_limit: int = 0, show_instances: bool = False) -> str:
     tree = build_hierarchy_tree(design, depth_limit)
 
@@ -351,8 +359,8 @@ def emit_dot(design: Design, depth_limit: int = 0, show_instances: bool = False)
 
     def add_cluster(node: HierarchyNode, indent: int) -> None:
         prefix = "  " * indent
-        cluster_id = f"cluster_{stable_int(*node.path, 'cluster'):08x}"
-        anchor_id = f"anchor_{stable_int(*node.path, 'anchor'):08x}"
+        cluster_id = dot_cluster_id(node)
+        anchor_id = dot_anchor_id(node)
         fill, border, penwidth = module_style(design, node.module_name, node.depth)
         label = dot_escape(hierarchy_label(node, show_instances))
 
@@ -366,6 +374,19 @@ def emit_dot(design: Design, depth_limit: int = 0, show_instances: bool = False)
         lines.append(f'{prefix}  "{anchor_id}";')
         for child in node.children:
             add_cluster(child, indent + 1)
+        rows = child_rows(node.children)
+        for row in rows:
+            anchors = [dot_anchor_id(child) for child in row]
+            if len(anchors) > 1:
+                same_rank = " ".join(f'"{anchor}";' for anchor in anchors)
+                lines.append(f"{prefix}  {{ rank=same; {same_rank} }}")
+                for left, right in zip(anchors, anchors[1:]):
+                    lines.append(f'{prefix}  "{left}" -> "{right}" [style=invis, weight=100];')
+        for upper, lower in zip(rows, rows[1:]):
+            lines.append(
+                f'{prefix}  "{dot_anchor_id(upper[0])}" -> "{dot_anchor_id(lower[0])}" '
+                '[style=invis, weight=100];'
+            )
         lines.append(f"{prefix}}}")
 
     add_cluster(tree, 1)
