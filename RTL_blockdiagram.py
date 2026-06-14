@@ -9,10 +9,13 @@ import json
 import re
 import shutil
 import subprocess
+import zipfile
 from collections import deque
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Set, Tuple
+from xml.sax.saxutils import escape as xml_escape
 
 
 MODULE_RE = re.compile(r"\bmodule\s+([A-Za-z_][A-Za-z0-9_$]*)")
@@ -63,6 +66,8 @@ CONTAINER_PAD = 22
 CHILD_GAP = 18
 ROW_GAP = 72
 MAX_CHILD_COLUMNS = 4
+VISIO_PX_PER_INCH = 96
+VISIO_PAGE_MARGIN = 60
 
 
 @dataclass
@@ -523,6 +528,200 @@ def emit_excalidraw(design: Design, depth_limit: int = 0, show_instances: bool =
     return json.dumps(scene, indent=2) + "\n"
 
 
+def iter_hierarchy_nodes(node: HierarchyNode) -> List[HierarchyNode]:
+    nodes = [node]
+    for child in node.children:
+        nodes.extend(iter_hierarchy_nodes(child))
+    return nodes
+
+
+def visio_number(value: float) -> str:
+    text = f"{value:.4f}".rstrip("0").rstrip(".")
+    return text if text else "0"
+
+
+def px_to_visio(value: float) -> float:
+    return value / VISIO_PX_PER_INCH
+
+
+def visio_shape_xml(
+    shape_id: int,
+    node: HierarchyNode,
+    x: float,
+    y: float,
+    page_height: float,
+    design: Design,
+    show_instances: bool,
+) -> str:
+    fill, border, penwidth = module_style(design, node.module_name, node.depth)
+    label = xml_escape(hierarchy_label(node, show_instances))
+    width = px_to_visio(node.width)
+    height = px_to_visio(node.height)
+    pin_x = px_to_visio(x + node.width / 2)
+    pin_y = page_height - px_to_visio(y + node.height / 2)
+    line_weight = max(0.01, 0.01 * penwidth)
+    font_size = 0.24 if node.depth == 0 else 0.18
+    text_height = 0.45 if "\n" not in label else 0.62
+    return f"""    <Shape ID="{shape_id}" NameU="{xml_escape(node.module_name)}" Type="Shape" LineStyle="0" FillStyle="0" TextStyle="0">
+      <Cell N="PinX" V="{visio_number(pin_x)}"/>
+      <Cell N="PinY" V="{visio_number(pin_y)}"/>
+      <Cell N="Width" V="{visio_number(width)}"/>
+      <Cell N="Height" V="{visio_number(height)}"/>
+      <Cell N="LocPinX" V="{visio_number(width / 2)}"/>
+      <Cell N="LocPinY" V="{visio_number(height / 2)}"/>
+      <Cell N="FillForegnd" V="{fill}"/>
+      <Cell N="FillPattern" V="1"/>
+      <Cell N="LineColor" V="{border}"/>
+      <Cell N="LineWeight" V="{visio_number(line_weight)}"/>
+      <Cell N="Rounding" V="0.05"/>
+      <Cell N="TxtWidth" V="{visio_number(max(0.5, width - 0.25))}"/>
+      <Cell N="TxtHeight" V="{visio_number(text_height)}"/>
+      <Cell N="TxtPinX" V="{visio_number(width / 2)}"/>
+      <Cell N="TxtPinY" V="{visio_number(max(0.2, height - text_height / 2 - 0.1))}"/>
+      <Cell N="VerticalAlign" V="0"/>
+      <Section N="Character">
+        <Row IX="0">
+          <Cell N="Size" V="{visio_number(font_size)}"/>
+        </Row>
+      </Section>
+      <Section N="Paragraph">
+        <Row IX="0">
+          <Cell N="HorzAlign" V="0"/>
+        </Row>
+      </Section>
+      <Text>{label}</Text>
+    </Shape>"""
+
+
+def visio_page_xml(
+    design: Design,
+    tree: HierarchyNode,
+    positions: Dict[Tuple[str, ...], Tuple[float, float]],
+    show_instances: bool,
+) -> str:
+    nodes = iter_hierarchy_nodes(tree)
+    max_x = max(positions[node.path][0] + node.width for node in nodes) + VISIO_PAGE_MARGIN
+    max_y = max(positions[node.path][1] + node.height for node in nodes) + VISIO_PAGE_MARGIN
+    page_width = max(8.5, px_to_visio(max_x))
+    page_height = max(11.0, px_to_visio(max_y))
+    shapes = [
+        visio_shape_xml(index, node, *positions[node.path], page_height, design, show_instances)
+        for index, node in enumerate(nodes, start=1)
+    ]
+    return f"""<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<PageContents xmlns="http://schemas.microsoft.com/office/visio/2012/main" xml:space="preserve">
+  <PageSheet LineStyle="0" FillStyle="0" TextStyle="0">
+    <Cell N="PageWidth" V="{visio_number(page_width)}"/>
+    <Cell N="PageHeight" V="{visio_number(page_height)}"/>
+    <Cell N="DrawingScale" V="1"/>
+    <Cell N="PageScale" V="1"/>
+  </PageSheet>
+  <Shapes>
+{chr(10).join(shapes)}
+  </Shapes>
+</PageContents>
+"""
+
+
+def visio_package_parts(page_xml: str) -> Dict[str, str]:
+    now = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    return {
+        "[Content_Types].xml": """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+  <Default Extension="xml" ContentType="application/xml"/>
+  <Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"/>
+  <Override PartName="/docProps/app.xml" ContentType="application/vnd.openxmlformats-officedocument.extended-properties+xml"/>
+  <Override PartName="/visio/document.xml" ContentType="application/vnd.ms-visio.drawing.main+xml"/>
+  <Override PartName="/visio/pages/pages.xml" ContentType="application/vnd.ms-visio.pages+xml"/>
+  <Override PartName="/visio/pages/page1.xml" ContentType="application/vnd.ms-visio.page+xml"/>
+</Types>
+""",
+        "_rels/.rels": """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="visio/document.xml"/>
+  <Relationship Id="rId2" Type="http://schemas.openxmlformats.org/package/2006/relationships/metadata/core-properties" Target="docProps/core.xml"/>
+  <Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/extended-properties" Target="docProps/app.xml"/>
+</Relationships>
+""",
+        "docProps/core.xml": f"""<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:dcterms="http://purl.org/dc/terms/" xmlns:dcmitype="http://purl.org/dc/dcmitype/" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+  <dc:title>RTL DataPath</dc:title>
+  <dc:creator>RTL_blockdiagram.py</dc:creator>
+  <cp:lastModifiedBy>RTL_blockdiagram.py</cp:lastModifiedBy>
+  <dcterms:created xsi:type="dcterms:W3CDTF">{now}</dcterms:created>
+  <dcterms:modified xsi:type="dcterms:W3CDTF">{now}</dcterms:modified>
+</cp:coreProperties>
+""",
+        "docProps/app.xml": """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/extended-properties" xmlns:vt="http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes">
+  <Application>RTL_blockdiagram.py</Application>
+  <DocSecurity>0</DocSecurity>
+  <ScaleCrop>false</ScaleCrop>
+  <HeadingPairs>
+    <vt:vector size="2" baseType="variant">
+      <vt:variant><vt:lpstr>Pages</vt:lpstr></vt:variant>
+      <vt:variant><vt:i4>1</vt:i4></vt:variant>
+    </vt:vector>
+  </HeadingPairs>
+  <TitlesOfParts>
+    <vt:vector size="1" baseType="lpstr">
+      <vt:lpstr>Page-1</vt:lpstr>
+    </vt:vector>
+  </TitlesOfParts>
+  <LinksUpToDate>false</LinksUpToDate>
+  <SharedDoc>false</SharedDoc>
+  <HyperlinksChanged>false</HyperlinksChanged>
+  <AppVersion>16.0000</AppVersion>
+</Properties>
+""",
+        "visio/document.xml": """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<VisioDocument xmlns="http://schemas.microsoft.com/office/visio/2012/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xml:space="preserve">
+  <DocumentSettings/>
+  <Colors/>
+  <FaceNames>
+    <FaceName ID="0" Name="Calibri"/>
+  </FaceNames>
+  <StyleSheets>
+    <StyleSheet ID="0" Name="No Style" NameU="No Style" IsCustomName="1" IsCustomNameU="1">
+      <Cell N="EnableLineProps" V="1"/>
+      <Cell N="EnableFillProps" V="1"/>
+      <Cell N="EnableTextProps" V="1"/>
+    </StyleSheet>
+  </StyleSheets>
+  <DocumentSheet LineStyle="0" FillStyle="0" TextStyle="0"/>
+</VisioDocument>
+""",
+        "visio/_rels/document.xml.rels": """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.microsoft.com/visio/2010/relationships/pages" Target="pages/pages.xml"/>
+</Relationships>
+""",
+        "visio/pages/pages.xml": """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Pages xmlns="http://schemas.microsoft.com/office/visio/2012/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <Page ID="0" Name="Page-1" NameU="Page-1" IsCustomName="1" IsCustomNameU="1" Rel="rId1"/>
+</Pages>
+""",
+        "visio/pages/_rels/pages.xml.rels": """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.microsoft.com/visio/2010/relationships/page" Target="page1.xml"/>
+</Relationships>
+""",
+        "visio/pages/page1.xml": page_xml,
+    }
+
+
+def write_visio_vsdx(path: Path, design: Design, depth_limit: int = 0, show_instances: bool = False) -> None:
+    tree = build_hierarchy_tree(design, depth_limit)
+    compute_hierarchy_layout(tree)
+    node_positions: Dict[Tuple[str, ...], Tuple[float, float]] = {}
+    place_hierarchy(tree, 60, 60, node_positions)
+    page_xml = visio_page_xml(design, tree, node_positions, show_instances)
+    with zipfile.ZipFile(path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        for name, content in visio_package_parts(page_xml).items():
+            archive.writestr(name, content)
+
+
 def maybe_render_png(dot_file: Path, png_file: Path) -> bool:
     dot_bin = shutil.which("dot")
     if not dot_bin:
@@ -566,6 +765,12 @@ def main() -> None:
         help="Output Excalidraw-compatible scene path",
     )
     parser.add_argument(
+        "--visio",
+        type=Path,
+        default=Path("rtl_datapath.vsdx"),
+        help="Output Visio-compatible .vsdx path",
+    )
+    parser.add_argument(
         "--show-instances",
         action="store_true",
         help="Show instance names above module names inside hierarchy blocks.",
@@ -588,9 +793,11 @@ def main() -> None:
     args.out.write_text(dot, encoding="utf-8")
     excalidraw = emit_excalidraw(design, depth_limit, show_instances=args.show_instances)
     args.excalidraw.write_text(excalidraw, encoding="utf-8")
+    write_visio_vsdx(args.visio, design, depth_limit, show_instances=args.show_instances)
 
     print(f"[OK] DOT generated: {args.out}")
     print(f"[OK] Excalidraw generated: {args.excalidraw}")
+    print(f"[OK] Visio generated: {args.visio}")
     root_source = "explicit" if design.top_is_explicit else "inferred"
     print(f"[INFO] diagram root: {design.top} ({root_source})")
     if not args.top and len(design.top_candidates) > 1:
