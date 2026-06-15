@@ -921,18 +921,18 @@ def main() -> None:
         default=None,
         help="Hierarchy depth below top. 0 draws all modules reachable from top.",
     )
-    parser.add_argument("--out", type=Path, default=Path("rtl_datapath.dot"), help="Output .dot path")
-    parser.add_argument("--png", type=Path, default=Path("rtl_datapath.png"), help="Optional png path")
+    parser.add_argument("--out", type=Path, default=None, help="Output .dot path")
+    parser.add_argument("--png", type=Path, default=None, help="Optional png path")
     parser.add_argument(
         "--excalidraw",
         type=Path,
-        default=Path("rtl_datapath.excalidraw"),
+        default=None,
         help="Output Excalidraw-compatible scene path",
     )
     parser.add_argument(
         "--visio",
         type=Path,
-        default=Path("rtl_datapath.vdx"),
+        default=None,
         help="Output Visio XML Drawing .vdx path",
     )
     parser.add_argument(
@@ -950,10 +950,20 @@ def main() -> None:
         depth_limit = 0
     if depth_limit < 0:
         parser.error("depth must be 0 or greater")
+
+    design = build_design(args.filelist, args.top)
+    default_stem = f"{design.top}_blockdiagrm"
+    if args.out is None:
+        args.out = Path(f"{default_stem}.dot")
+    if args.png is None:
+        args.png = Path(f"{default_stem}.png")
+    if args.excalidraw is None:
+        args.excalidraw = Path(f"{default_stem}.excalidraw")
+    if args.visio is None:
+        args.visio = Path(f"{default_stem}.vdx")
     if args.visio.suffix.lower() != ".vdx":
         parser.error("--visio output must use the .vdx extension")
 
-    design = build_design(args.filelist, args.top)
     tree = build_hierarchy_tree(design, depth_limit)
     drawn_block_count = count_hierarchy_nodes(tree)
     dot = emit_dot(design, depth_limit, show_instances=args.show_instances)

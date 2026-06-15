@@ -35,10 +35,10 @@ Layout rules:
 
 Outputs:
 
-- `rtl_datapath.dot`: Graphviz DOT source using nested clusters.
-- `rtl_datapath.png`: generated when Graphviz `dot` is installed.
-- `rtl_datapath.excalidraw`: editable Excalidraw-compatible block diagram.
-- `rtl_datapath.vdx`: Visio XML Drawing block diagram.
+- `<TOPNAME>_blockdiagrm.dot`: Graphviz DOT source using nested clusters.
+- `<TOPNAME>_blockdiagrm.png`: generated when Graphviz `dot` is installed.
+- `<TOPNAME>_blockdiagrm.excalidraw`: editable Excalidraw-compatible block diagram.
+- `<TOPNAME>_blockdiagrm.vdx`: Visio XML Drawing block diagram.
 
 Output paths can be overridden:
 
