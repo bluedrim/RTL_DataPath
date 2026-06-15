@@ -35,10 +35,10 @@ Layout rules:
 
 Outputs:
 
-- `<TOPNAME>_blockdiagrm.dot`: Graphviz DOT source using nested clusters.
-- `<TOPNAME>_blockdiagrm.png`: generated when Graphviz `dot` is installed.
-- `<TOPNAME>_blockdiagrm.excalidraw`: editable Excalidraw-compatible block diagram.
-- `<TOPNAME>_blockdiagrm.vdx`: Visio XML Drawing block diagram.
+- `output/<TOPNAME>_blockdiagrm.dot`: Graphviz DOT source using nested clusters.
+- `output/<TOPNAME>_blockdiagrm.png`: generated when Graphviz `dot` is installed.
+- `output/<TOPNAME>_blockdiagrm.excalidraw`: editable Excalidraw-compatible block diagram.
+- `output/<TOPNAME>_blockdiagrm.vdx`: Visio XML Drawing block diagram.
 
 Output paths can be overridden:
 

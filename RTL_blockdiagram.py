@@ -66,6 +66,7 @@ CONTAINER_PAD = 22
 CHILD_GAP = 18
 ROW_GAP = 72
 MAX_CHILD_COLUMNS = 4
+OUTPUT_DIR = Path("output")
 VISIO_PX_PER_INCH = 96
 VISIO_PAGE_MARGIN = 60
 
@@ -345,6 +346,12 @@ def build_design(filelist: Path, explicit_top: str | None) -> Design:
         raise ValueError(f"Top module '{top}' not found in parsed modules.")
 
     return Design(modules=modules, top=top, top_candidates=top_candidates, top_is_explicit=bool(explicit_top))
+
+
+def ensure_parent_dir(path: Path) -> None:
+    parent = path.parent
+    if parent != Path("."):
+        parent.mkdir(parents=True, exist_ok=True)
 
 
 def dot_escape(text: str) -> str:
@@ -954,22 +961,25 @@ def main() -> None:
     design = build_design(args.filelist, args.top)
     default_stem = f"{design.top}_blockdiagrm"
     if args.out is None:
-        args.out = Path(f"{default_stem}.dot")
+        args.out = OUTPUT_DIR / f"{default_stem}.dot"
     if args.png is None:
-        args.png = Path(f"{default_stem}.png")
+        args.png = OUTPUT_DIR / f"{default_stem}.png"
     if args.excalidraw is None:
-        args.excalidraw = Path(f"{default_stem}.excalidraw")
+        args.excalidraw = OUTPUT_DIR / f"{default_stem}.excalidraw"
     if args.visio is None:
-        args.visio = Path(f"{default_stem}.vdx")
+        args.visio = OUTPUT_DIR / f"{default_stem}.vdx"
     if args.visio.suffix.lower() != ".vdx":
         parser.error("--visio output must use the .vdx extension")
 
     tree = build_hierarchy_tree(design, depth_limit)
     drawn_block_count = count_hierarchy_nodes(tree)
     dot = emit_dot(design, depth_limit, show_instances=args.show_instances)
+    ensure_parent_dir(args.out)
     args.out.write_text(dot, encoding="utf-8")
     excalidraw = emit_excalidraw(design, depth_limit, show_instances=args.show_instances)
+    ensure_parent_dir(args.excalidraw)
     args.excalidraw.write_text(excalidraw, encoding="utf-8")
+    ensure_parent_dir(args.visio)
     write_visio_vdx(args.visio, design, depth_limit, show_instances=args.show_instances)
 
     print(f"[OK] DOT generated: {args.out}")
@@ -987,6 +997,7 @@ def main() -> None:
     print(f"[INFO] drawn block count: {drawn_block_count}")
 
     try:
+        ensure_parent_dir(args.png)
         rendered = maybe_render_png(args.out, args.png)
     except subprocess.CalledProcessError as exc:
         print(f"[WARN] dot rendering failed: {exc}")
