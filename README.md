@@ -38,7 +38,7 @@ Outputs:
 - `rtl_datapath.dot`: Graphviz DOT source using nested clusters.
 - `rtl_datapath.png`: generated when Graphviz `dot` is installed.
 - `rtl_datapath.excalidraw`: editable Excalidraw-compatible block diagram.
-- `rtl_datapath.vsdx`: Visio-compatible block diagram.
+- `rtl_datapath.vdx`: Visio XML Drawing block diagram.
 
 Output paths can be overridden:
 
@@ -47,7 +47,7 @@ python3 RTL_blockdiagram.py ./rte/filelist.f 3 \
   --out hierarchy.dot \
   --png hierarchy.png \
   --excalidraw hierarchy.excalidraw \
-  --visio hierarchy.vsdx
+  --visio hierarchy.vdx
 ```
 
 ## Filelist Support

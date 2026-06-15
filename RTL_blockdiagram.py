@@ -751,6 +751,142 @@ def write_visio_vsdx(path: Path, design: Design, depth_limit: int = 0, show_inst
             archive.writestr(name, content)
 
 
+def visio_vdx_shape_xml(
+    shape_id: int,
+    node: HierarchyNode,
+    x: float,
+    y: float,
+    page_height: float,
+    design: Design,
+    show_instances: bool,
+) -> str:
+    fill, border, penwidth = module_style(design, node.module_name, node.depth)
+    label = xml_escape(hierarchy_label(node, show_instances))
+    width = px_to_visio(node.width)
+    height = px_to_visio(node.height)
+    pin_x = px_to_visio(x + node.width / 2)
+    pin_y = page_height - px_to_visio(y + node.height / 2)
+    loc_pin_x = width / 2
+    loc_pin_y = height / 2
+    line_weight = max(0.01, 0.01 * penwidth)
+    font_size = 0.24 if node.depth == 0 else 0.18
+    text_height = 0.45 if "\n" not in label else 0.62
+    shape_name = xml_escape(f"{node.module_name}_{shape_id}")
+    return f"""      <Shape ID="{shape_id}" Name="{xml_escape(node.module_name)}" NameU="{shape_name}" Type="Shape" LineStyle="0" FillStyle="0" TextStyle="0">
+        <XForm>
+          <PinX>{visio_number(pin_x)}</PinX>
+          <PinY>{visio_number(pin_y)}</PinY>
+          <Width>{visio_number(width)}</Width>
+          <Height>{visio_number(height)}</Height>
+          <LocPinX>{visio_number(loc_pin_x)}</LocPinX>
+          <LocPinY>{visio_number(loc_pin_y)}</LocPinY>
+        </XForm>
+        <Line>
+          <LineColor>{border}</LineColor>
+          <LineWeight>{visio_number(line_weight)}</LineWeight>
+        </Line>
+        <Fill>
+          <FillForegnd>{fill}</FillForegnd>
+          <FillPattern>1</FillPattern>
+        </Fill>
+        <TextBlock>
+          <TxtWidth>{visio_number(max(0.5, width - 0.25))}</TxtWidth>
+          <TxtHeight>{visio_number(text_height)}</TxtHeight>
+          <TxtPinX>{visio_number(width / 2)}</TxtPinX>
+          <TxtPinY>{visio_number(max(0.2, height - text_height / 2 - 0.1))}</TxtPinY>
+          <VerticalAlign>0</VerticalAlign>
+        </TextBlock>
+        <Char IX="0">
+          <Font>0</Font>
+          <Size>{visio_number(font_size)}</Size>
+        </Char>
+        <Para IX="0">
+          <HorzAlign>0</HorzAlign>
+        </Para>
+        <Geom IX="0">
+          <NoFill>0</NoFill>
+          <NoLine>0</NoLine>
+          <NoShow>0</NoShow>
+          <NoSnap>0</NoSnap>
+          <MoveTo IX="1">
+            <X>0</X>
+            <Y>0</Y>
+          </MoveTo>
+          <LineTo IX="2">
+            <X>{visio_number(width)}</X>
+            <Y>0</Y>
+          </LineTo>
+          <LineTo IX="3">
+            <X>{visio_number(width)}</X>
+            <Y>{visio_number(height)}</Y>
+          </LineTo>
+          <LineTo IX="4">
+            <X>0</X>
+            <Y>{visio_number(height)}</Y>
+          </LineTo>
+          <LineTo IX="5">
+            <X>0</X>
+            <Y>0</Y>
+          </LineTo>
+        </Geom>
+        <Text>{label}</Text>
+      </Shape>"""
+
+
+def emit_visio_vdx(design: Design, depth_limit: int = 0, show_instances: bool = False) -> str:
+    tree = build_hierarchy_tree(design, depth_limit)
+    compute_hierarchy_layout(tree)
+    node_positions: Dict[Tuple[str, ...], Tuple[float, float]] = {}
+    place_hierarchy(tree, 60, 60, node_positions)
+    nodes = iter_hierarchy_nodes(tree)
+    max_x = max(node_positions[node.path][0] + node.width for node in nodes) + VISIO_PAGE_MARGIN
+    max_y = max(node_positions[node.path][1] + node.height for node in nodes) + VISIO_PAGE_MARGIN
+    page_width = max(8.5, px_to_visio(max_x))
+    page_height = max(11.0, px_to_visio(max_y))
+    shapes = [
+        visio_vdx_shape_xml(index, node, *node_positions[node.path], page_height, design, show_instances)
+        for index, node in enumerate(nodes, start=1)
+    ]
+    return f"""<?xml version="1.0" encoding="UTF-8"?>
+<VisioDocument xmlns="http://schemas.microsoft.com/visio/2003/core" start="0" metric="0" DocLangID="1033">
+  <DocumentProperties>
+    <Title>RTL DataPath</Title>
+    <Creator>RTL_blockdiagram.py</Creator>
+    <Company/>
+  </DocumentProperties>
+  <Colors/>
+  <FaceNames>
+    <FaceName ID="0" Name="Calibri"/>
+  </FaceNames>
+  <StyleSheets>
+    <StyleSheet ID="0" Name="No Style" NameU="No Style" IsCustomName="1" IsCustomNameU="1"/>
+  </StyleSheets>
+  <DocumentSheet LineStyle="0" FillStyle="0" TextStyle="0"/>
+  <Pages>
+    <Page ID="0" Name="Page-1" NameU="Page-1" IsCustomName="1" IsCustomNameU="1">
+      <PageSheet LineStyle="0" FillStyle="0" TextStyle="0">
+        <PageProps>
+          <PageWidth>{visio_number(page_width)}</PageWidth>
+          <PageHeight>{visio_number(page_height)}</PageHeight>
+          <DrawingScale>1</DrawingScale>
+          <PageScale>1</PageScale>
+          <DrawingScaleType>0</DrawingScaleType>
+          <DrawingSizeType>0</DrawingSizeType>
+        </PageProps>
+      </PageSheet>
+      <Shapes>
+{chr(10).join(shapes)}
+      </Shapes>
+    </Page>
+  </Pages>
+</VisioDocument>
+"""
+
+
+def write_visio_vdx(path: Path, design: Design, depth_limit: int = 0, show_instances: bool = False) -> None:
+    path.write_text(emit_visio_vdx(design, depth_limit, show_instances), encoding="utf-8")
+
+
 def maybe_render_png(dot_file: Path, png_file: Path) -> bool:
     dot_bin = shutil.which("dot")
     if not dot_bin:
@@ -796,8 +932,8 @@ def main() -> None:
     parser.add_argument(
         "--visio",
         type=Path,
-        default=Path("rtl_datapath.vsdx"),
-        help="Output Visio-compatible .vsdx path",
+        default=Path("rtl_datapath.vdx"),
+        help="Output Visio XML Drawing .vdx path",
     )
     parser.add_argument(
         "--show-instances",
@@ -814,6 +950,8 @@ def main() -> None:
         depth_limit = 0
     if depth_limit < 0:
         parser.error("depth must be 0 or greater")
+    if args.visio.suffix.lower() != ".vdx":
+        parser.error("--visio output must use the .vdx extension")
 
     design = build_design(args.filelist, args.top)
     tree = build_hierarchy_tree(design, depth_limit)
@@ -822,7 +960,7 @@ def main() -> None:
     args.out.write_text(dot, encoding="utf-8")
     excalidraw = emit_excalidraw(design, depth_limit, show_instances=args.show_instances)
     args.excalidraw.write_text(excalidraw, encoding="utf-8")
-    write_visio_vsdx(args.visio, design, depth_limit, show_instances=args.show_instances)
+    write_visio_vdx(args.visio, design, depth_limit, show_instances=args.show_instances)
 
     print(f"[OK] DOT generated: {args.out}")
     print(f"[OK] Excalidraw generated: {args.excalidraw}")
