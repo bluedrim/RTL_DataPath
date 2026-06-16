@@ -972,6 +972,55 @@ def excalidraw_base_element(element_id: str, element_type: str, x: float, y: flo
     }
 
 
+def wrap_text_chunks(text: str, max_chars: int) -> List[str]:
+    if len(text) <= max_chars:
+        return [text]
+    return [text[index : index + max_chars] for index in range(0, len(text), max_chars)]
+
+
+def wrap_hierarchy_label(text: str, max_chars: int) -> List[str]:
+    lines: List[str] = []
+    current = ""
+    for part in text.split("."):
+        if not part:
+            continue
+        if len(part) > max_chars:
+            if current:
+                lines.append(current)
+                current = ""
+            lines.extend(wrap_text_chunks(part, max_chars))
+            continue
+        candidate = part if not current else f"{current}.{part}"
+        if len(candidate) <= max_chars:
+            current = candidate
+        else:
+            lines.append(current)
+            current = part
+    if current:
+        lines.append(current)
+    return lines or [text]
+
+
+def trace_node_label(ref: SignalRef, max_chars: int) -> str:
+    lines = wrap_hierarchy_label(".".join(ref.path), max_chars)
+    lines.extend(wrap_hierarchy_label(ref.signal, max_chars))
+    return "\n".join(lines)
+
+
+def trace_edge_label(text: str, max_chars: int) -> str:
+    lines: List[str] = []
+    for token in text.split():
+        if not lines:
+            lines.extend(wrap_text_chunks(token, max_chars))
+            continue
+        candidate = f"{lines[-1]} {token}"
+        if len(candidate) <= max_chars:
+            lines[-1] = candidate
+        else:
+            lines.extend(wrap_text_chunks(token, max_chars))
+    return "\n".join(lines or [text])
+
+
 def emit_trace_excalidraw(result: TraceResult) -> str:
     path_refs = [result.start]
     for edge in result.main_path:
@@ -979,9 +1028,17 @@ def emit_trace_excalidraw(result: TraceResult) -> str:
 
     elements: List[Dict[str, Any]] = []
     node_width = 260
-    node_height = 90
     x_gap = 120
     y = 80
+    node_font_size = 16
+    node_line_height = 1.2
+    node_text_pad_x = 12
+    node_text_pad_y = 12
+    node_label_chars = 26
+    node_labels = [trace_node_label(ref, node_label_chars) for ref in path_refs]
+    max_node_lines = max((label.count("\n") + 1 for label in node_labels), default=2)
+    node_text_height = max(52, max_node_lines * node_font_size * node_line_height)
+    node_height = max(90, node_text_height + node_text_pad_y * 2)
     positions: Dict[int, Tuple[float, float]] = {}
 
     for index, ref in enumerate(path_refs):
@@ -1002,24 +1059,24 @@ def emit_trace_excalidraw(result: TraceResult) -> str:
             }
         )
         elements.append(rect)
-        label = f"{'.'.join(ref.path)}\n{ref.signal}"
-        text = excalidraw_base_element(text_id, "text", x + 12, y + 18)
+        label = node_labels[index]
+        text = excalidraw_base_element(text_id, "text", x + node_text_pad_x, y + node_text_pad_y)
         text.update(
             {
-                "width": node_width - 24,
-                "height": 52,
+                "width": node_width - node_text_pad_x * 2,
+                "height": node_height - node_text_pad_y * 2,
                 "strokeColor": "#1e1e1e",
                 "roughness": 0,
-                "fontSize": 16,
+                "fontSize": node_font_size,
                 "fontFamily": 1,
                 "text": label,
                 "rawText": label,
                 "textAlign": "center",
                 "verticalAlign": "middle",
-                "baseline": 40,
+                "baseline": node_font_size * node_line_height * (label.count("\n") + 1),
                 "containerId": None,
                 "originalText": label,
-                "lineHeight": 1.2,
+                "lineHeight": node_line_height,
             }
         )
         elements.append(text)
@@ -1027,9 +1084,13 @@ def emit_trace_excalidraw(result: TraceResult) -> str:
     for index, edge in enumerate(result.main_path):
         src_x, src_y = positions[index]
         dst_x, dst_y = positions[index + 1]
-        start_x = src_x + node_width
+        if result.direction == "reverse":
+            start_x = dst_x
+            end_x = src_x + node_width
+        else:
+            start_x = src_x + node_width
+            end_x = dst_x
         start_y = src_y + node_height / 2
-        end_x = dst_x
         end_y = dst_y + node_height / 2
         arrow_id = f"trace-arrow-{index}-{stable_int(edge.src.label(), edge.dst.label()):08x}"
         arrow = excalidraw_base_element(arrow_id, "arrow", start_x, start_y)
@@ -1050,23 +1111,34 @@ def emit_trace_excalidraw(result: TraceResult) -> str:
         )
         elements.append(arrow)
         rename = f"{edge.src.signal} -> {edge.dst.signal}" if edge.src.signal != edge.dst.signal else edge.action
-        label = excalidraw_base_element(f"trace-label-{index}-{stable_int(rename):08x}", "text", start_x + 12, start_y - 36)
+        rename_label = trace_edge_label(rename, 14)
+        rename_lines = rename_label.count("\n") + 1
+        label_width = 108
+        label_height = max(22, rename_lines * 14 * 1.2 + 6)
+        label_x = min(start_x, end_x) + (abs(end_x - start_x) - label_width) / 2
+        label_y = y + node_height + 14
+        label = excalidraw_base_element(
+            f"trace-label-{index}-{stable_int(rename):08x}",
+            "text",
+            label_x,
+            label_y,
+        )
         label.update(
             {
-                "width": max(110, min(280, len(rename) * 8)),
-                "height": 22,
+                "width": label_width,
+                "height": label_height,
                 "strokeColor": "#1e1e1e",
                 "backgroundColor": "#ffffff",
                 "roughness": 0,
                 "fontSize": 14,
                 "fontFamily": 1,
-                "text": rename,
-                "rawText": rename,
+                "text": rename_label,
+                "rawText": rename_label,
                 "textAlign": "center",
                 "verticalAlign": "middle",
-                "baseline": 17,
+                "baseline": 14 * 1.2 * rename_lines,
                 "containerId": None,
-                "originalText": rename,
+                "originalText": rename_label,
                 "lineHeight": 1.2,
             }
         )

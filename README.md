@@ -84,6 +84,7 @@ Trace behavior:
 - Follows named instance port connections, continuous `assign`, and simple procedural assignments.
 - Continues through renames such as `assign stage_data = i_data`.
 - Supports output-port tracing. If the start signal is an `output`, `auto` mode traces backward from output to its source signals.
+- In Excalidraw, reverse output traces draw arrows in the reverse direction.
 - Reverse output tracing continues through chained assignments such as `a <= b`, `b <= c`, and `c <= d`.
 - Stops and prints a stop record when the signal enters conditional logic such as `if`, `case`, or a conditional procedural assignment.
 - Selects `MAIN` by preferring paths that reach output ports for forward traces or input ports for reverse traces.
@@ -93,7 +94,7 @@ Trace behavior:
 - Writes the path-only summary to `--output` or `trace_<signal>.txt`.
 - If `--signal <file>` is used, traces every listed signal in order and writes all results to `--output` or `trace_<signal_file_stem>.txt`.
 - Missing signals are reported as `[ERROR] <signal>: ...` and the command exits non-zero after writing the output file.
-- Writes `rtl_datapath_trace.excalidraw`, showing the main path with arrows and signal rename labels.
+- Writes `rtl_datapath_trace.excalidraw`, showing the main path with arrows, wrapped hierarchy labels inside blocks, and signal rename labels below blocks.
 
 Options:
 
