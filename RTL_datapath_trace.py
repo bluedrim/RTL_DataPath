@@ -157,6 +157,12 @@ class TraceResult:
     all_paths: List[List[TraceEdge]]
 
 
+class MultipleTopCandidatesError(ValueError):
+    def __init__(self, candidates: List[str]) -> None:
+        self.candidates = candidates
+        super().__init__("Multiple TOP candidates found.")
+
+
 def strip_comments(text: str) -> str:
     text = COMMENT_BLOCK_RE.sub("", text)
     return COMMENT_LINE_RE.sub("", text)
@@ -540,6 +546,8 @@ def build_design(filelist: Path, explicit_top: str | None) -> Design:
     top_candidates = infer_top_candidates(modules)
     top = explicit_top
     if not top:
+        if len(top_candidates) > 1:
+            raise MultipleTopCandidatesError(top_candidates)
         top, top_candidates = infer_top(modules)
     if top not in modules:
         raise ValueError(f"Top module '{top}' not found in parsed modules.")
@@ -1005,6 +1013,32 @@ def safe_trace_filename(signal: str) -> Path:
     return Path(f"trace_{safe}.txt")
 
 
+def quote_cli_arg(value: object) -> str:
+    return shlex.quote(str(value))
+
+
+def format_multiple_top_message(prog: str, filelist: Path, signal: str, candidates: List[str]) -> str:
+    lines = [f"[ERROR] Multiple TOP candidates found ({len(candidates)}).", "Specify one with --top <module>.", ""]
+    lines.append("TOP candidates:")
+    lines.extend(f"  - {candidate}" for candidate in candidates)
+    lines.extend(["", "Command examples:"])
+    for candidate in candidates:
+        lines.append(
+            "  "
+            + " ".join(
+                [
+                    "python3",
+                    quote_cli_arg(prog),
+                    quote_cli_arg(filelist),
+                    quote_cli_arg(signal),
+                    "--top",
+                    quote_cli_arg(candidate),
+                ]
+            )
+        )
+    return "\n".join(lines)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Trace a datapath from a hierarchical RTL signal.")
     parser.add_argument("filelist", type=Path, help="Path to Verilog/SystemVerilog filelist")
@@ -1019,7 +1053,10 @@ def main() -> None:
     parser.add_argument("--max-steps", type=int, default=1000, help="Maximum trace expansion steps")
     args = parser.parse_args()
 
-    design = build_design(args.filelist, args.top)
+    try:
+        design = build_design(args.filelist, args.top)
+    except MultipleTopCandidatesError as exc:
+        parser.exit(2, format_multiple_top_message(parser.prog, args.filelist, args.signal, exc.candidates) + "\n")
     root = build_hierarchy(design)
     start = resolve_start(root, args.signal)
     result = trace_datapath(design, root, start, max_steps=args.max_steps)

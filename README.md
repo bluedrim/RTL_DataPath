@@ -15,6 +15,7 @@ Depth rules:
 - `3`: draw modules up to 3 instance levels below TOP.
 - `0`: draw every parsed module reachable from TOP.
 - If `--top <module>` is not set, the diagram starts from the inferred full-design TOP.
+- If multiple TOP candidates are found, the tool stops and prints candidate names with `--top` command examples.
 - If `--top <module>` is set, the diagram starts from that module instead.
 
 Example with an explicit root module:

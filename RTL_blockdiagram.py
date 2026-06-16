@@ -103,6 +103,12 @@ class HierarchyNode:
     height: float = 0
 
 
+class MultipleTopCandidatesError(ValueError):
+    def __init__(self, candidates: List[str]) -> None:
+        self.candidates = candidates
+        super().__init__("Multiple TOP candidates found.")
+
+
 def strip_comments(text: str) -> str:
     text = COMMENT_BLOCK_RE.sub("", text)
     return COMMENT_LINE_RE.sub("", text)
@@ -401,6 +407,8 @@ def build_design(filelist: Path, explicit_top: str | None) -> Design:
     top_candidates = infer_top_candidates(modules)
     top = explicit_top
     if not top:
+        if len(top_candidates) > 1:
+            raise MultipleTopCandidatesError(top_candidates)
         top, top_candidates = infer_top(modules)
     if top not in modules:
         raise ValueError(f"Top module '{top}' not found in parsed modules.")
@@ -962,6 +970,32 @@ def maybe_render_png(dot_file: Path, png_file: Path) -> bool:
     return True
 
 
+def quote_cli_arg(value: object) -> str:
+    return shlex.quote(str(value))
+
+
+def format_multiple_top_message(prog: str, filelist: Path, depth_limit: int, candidates: List[str]) -> str:
+    lines = [f"[ERROR] Multiple TOP candidates found ({len(candidates)}).", "Specify one with --top <module>.", ""]
+    lines.append("TOP candidates:")
+    lines.extend(f"  - {candidate}" for candidate in candidates)
+    lines.extend(["", "Command examples:"])
+    for candidate in candidates:
+        lines.append(
+            "  "
+            + " ".join(
+                [
+                    "python3",
+                    quote_cli_arg(prog),
+                    quote_cli_arg(filelist),
+                    quote_cli_arg(depth_limit),
+                    "--top",
+                    quote_cli_arg(candidate),
+                ]
+            )
+        )
+    return "\n".join(lines)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Read an RTL filelist and generate a nested module hierarchy block diagram"
@@ -1018,7 +1052,10 @@ def main() -> None:
     if depth_limit < 0:
         parser.error("depth must be 0 or greater")
 
-    design = build_design(args.filelist, args.top)
+    try:
+        design = build_design(args.filelist, args.top)
+    except MultipleTopCandidatesError as exc:
+        parser.exit(2, format_multiple_top_message(parser.prog, args.filelist, depth_limit, exc.candidates) + "\n")
     default_stem = f"{design.top}_blockdiagrm"
     if args.out is None:
         args.out = OUTPUT_DIR / f"{default_stem}.dot"
@@ -1047,8 +1084,6 @@ def main() -> None:
     print(f"[OK] Visio generated: {args.visio}")
     root_source = "explicit" if design.top_is_explicit else "inferred"
     print(f"[INFO] diagram root: {design.top} ({root_source})")
-    if not args.top and len(design.top_candidates) > 1:
-        print(f"[INFO] top candidates: {', '.join(design.top_candidates)}")
     depth_text = "all" if depth_limit == 0 else str(depth_limit)
     print(f"[INFO] depth: {depth_text}")
     label_mode = "module + instance" if args.show_instances else "module only"
