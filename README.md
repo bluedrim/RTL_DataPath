@@ -78,6 +78,7 @@ Trace behavior:
 - Follows named instance port connections, continuous `assign`, and simple procedural assignments.
 - Continues through renames such as `assign stage_data = i_data`.
 - Supports output-port tracing. If the start signal is an `output`, `auto` mode traces backward from output to its source signals.
+- Reverse output tracing continues through chained assignments such as `a <= b`, `b <= c`, and `c <= d`.
 - Stops and prints a stop record when the signal enters conditional logic such as `if`, `case`, or a conditional procedural assignment.
 - Selects `MAIN` by preferring paths that reach output ports for forward traces or input ports for reverse traces.
 - Prints path summaries as `[PATH_0]`, `[PATH_1]`, and so on; console output also prints `MAIN` and `LONGEST` at the end.

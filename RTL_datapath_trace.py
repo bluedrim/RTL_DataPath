@@ -322,8 +322,16 @@ def expression_signals(expr: str) -> List[str]:
     return signals
 
 
+def signal_matches(left: str, right: str) -> bool:
+    return left == right or base_signal(left) == base_signal(right)
+
+
+def signal_in_signals(signal: str, signals: List[str]) -> bool:
+    return any(signal_matches(signal, candidate) for candidate in signals)
+
+
 def signal_in_expr(signal: str, expr: str) -> bool:
-    return signal in expression_signals(expr)
+    return signal_in_signals(signal, expression_signals(expr))
 
 
 def parse_port_decl_fragment(fragment: str, previous_direction: str | None) -> Tuple[str | None, List[str]]:
@@ -665,7 +673,14 @@ def ref_direction(design: Design, ref: SignalRef) -> str:
     module = design.modules.get(ref.module_name)
     if not module:
         return "unknown"
-    return module.port_directions.get(ref.signal, "unknown")
+    return module.port_directions.get(ref.signal, module.port_directions.get(base_signal(ref.signal), "unknown"))
+
+
+def port_connection(instance: Instance, signal: str) -> str | None:
+    if signal in instance.connections:
+        return instance.connections[signal]
+    signal_base = base_signal(signal)
+    return instance.connections.get(signal_base)
 
 
 def path_score(
@@ -740,7 +755,7 @@ def trace_datapath(
         stopped_here = False
 
         for kind, signals, expr in module.condition_uses:
-            if current.signal in signals:
+            if signal_in_signals(current.signal, signals):
                 stop = TraceEdge(
                     src=current,
                     dst=current,
@@ -757,11 +772,11 @@ def trace_datapath(
         for assignment in module.assignments:
             detail = f"{assignment.kind}: {assignment.lhs} = {assignment.rhs}"
             if trace_direction == "forward":
-                if current.signal not in assignment.rhs_signals:
+                if not signal_in_signals(current.signal, assignment.rhs_signals):
                     continue
                 next_signals = assignment.lhs_signals
             else:
-                if current.signal not in assignment.lhs_signals:
+                if not signal_in_signals(current.signal, assignment.lhs_signals):
                     continue
                 next_signals = assignment.rhs_signals
 
@@ -817,13 +832,16 @@ def trace_datapath(
                 advanced = True
 
         if node.parent and node.parent_instance:
-            direction = module.port_directions.get(current.signal, "unknown")
+            direction = module.port_directions.get(
+                current.signal,
+                module.port_directions.get(base_signal(current.signal), "unknown"),
+            )
             if trace_direction == "forward":
                 can_cross_to_parent = direction in {"output", "inout", "unknown"}
             else:
                 can_cross_to_parent = direction in {"input", "inout", "unknown"}
             if can_cross_to_parent:
-                expr = node.parent_instance.connections.get(current.signal)
+                expr = port_connection(node.parent_instance, current.signal)
                 if expr:
                     for parent_signal in connected_expr_signal(expr):
                         dst = SignalRef(path=node.parent.path, module_name=node.parent.module_name, signal=parent_signal)
