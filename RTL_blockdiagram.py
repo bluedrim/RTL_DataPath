@@ -662,6 +662,18 @@ def visio_number(value: float) -> str:
     return text if text else "0"
 
 
+def visio_formula_attr(formula: str | None) -> str:
+    return f' F="{xml_escape(formula)}"' if formula else ""
+
+
+def visio_cell(name: str, value: float, formula: str | None = None) -> str:
+    return f'<Cell N="{name}" V="{visio_number(value)}"{visio_formula_attr(formula)}/>'
+
+
+def visio_vdx_value(name: str, value: float, formula: str | None = None) -> str:
+    return f"<{name}{visio_formula_attr(formula)}>{visio_number(value)}</{name}>"
+
+
 def px_to_visio(value: float) -> float:
     return value / VISIO_PX_PER_INCH
 
@@ -677,6 +689,15 @@ def visio_text_block_layout(node: HierarchyNode, label: str, width: float, heigh
     text_height = max(px_to_visio(HEADER_HEIGHT - LABEL_TOP_PAD), nominal_height)
     text_pin_y = max(text_height / 2, height - text_height / 2 - px_to_visio(LABEL_TOP_PAD))
     return text_height, text_pin_y, width / 2, 0
+
+
+def visio_text_block_formulas(node: HierarchyNode, text_height: float) -> Tuple[str, str | None, str, str | None]:
+    text_width_formula = "Width-0.25"
+    text_pin_x_formula = "Width*0.5"
+    if not node.children:
+        return text_width_formula, "Height", text_pin_x_formula, "Height*0.5"
+    top_offset = text_height / 2 + px_to_visio(LABEL_TOP_PAD)
+    return text_width_formula, None, text_pin_x_formula, f"Height-{visio_number(top_offset)}"
 
 
 def visio_shape_xml(
@@ -697,23 +718,27 @@ def visio_shape_xml(
     line_weight = max(0.01, 0.01 * penwidth)
     font_size = visio_label_font_size(node)
     text_height, text_pin_y, text_pin_x, vertical_align = visio_text_block_layout(node, label, width, height)
+    text_width_formula, text_height_formula, text_pin_x_formula, text_pin_y_formula = visio_text_block_formulas(
+        node, text_height
+    )
+    text_width = max(0.5, width - 0.25)
     shape_name = xml_escape(f"{node.module_name}_{shape_id}")
     return f"""    <Shape ID="{shape_id}" Name="{xml_escape(node.module_name)}" NameU="{shape_name}" Type="Shape" LineStyle="0" FillStyle="0" TextStyle="0">
       <Cell N="PinX" V="{visio_number(pin_x)}"/>
       <Cell N="PinY" V="{visio_number(pin_y)}"/>
       <Cell N="Width" V="{visio_number(width)}"/>
       <Cell N="Height" V="{visio_number(height)}"/>
-      <Cell N="LocPinX" V="{visio_number(width / 2)}"/>
-      <Cell N="LocPinY" V="{visio_number(height / 2)}"/>
+      {visio_cell("LocPinX", width / 2, "Width*0.5")}
+      {visio_cell("LocPinY", height / 2, "Height*0.5")}
       <Cell N="FillForegnd" V="{fill}"/>
       <Cell N="FillPattern" V="1"/>
       <Cell N="LineColor" V="{border}"/>
       <Cell N="LineWeight" V="{visio_number(line_weight)}"/>
       <Cell N="Rounding" V="0.05"/>
-      <Cell N="TxtWidth" V="{visio_number(max(0.5, width - 0.25))}"/>
-      <Cell N="TxtHeight" V="{visio_number(text_height)}"/>
-      <Cell N="TxtPinX" V="{visio_number(text_pin_x)}"/>
-      <Cell N="TxtPinY" V="{visio_number(text_pin_y)}"/>
+      {visio_cell("TxtWidth", text_width, text_width_formula)}
+      {visio_cell("TxtHeight", text_height, text_height_formula)}
+      {visio_cell("TxtPinX", text_pin_x, text_pin_x_formula)}
+      {visio_cell("TxtPinY", text_pin_y, text_pin_y_formula)}
       <Cell N="VerticalAlign" V="{vertical_align}"/>
       <Section N="Character">
         <Row IX="0">
@@ -735,16 +760,16 @@ def visio_shape_xml(
           <Cell N="Y" V="0"/>
         </Row>
         <Row T="LineTo" IX="2">
-          <Cell N="X" V="{visio_number(width)}"/>
+          {visio_cell("X", width, "Width")}
           <Cell N="Y" V="0"/>
         </Row>
         <Row T="LineTo" IX="3">
-          <Cell N="X" V="{visio_number(width)}"/>
-          <Cell N="Y" V="{visio_number(height)}"/>
+          {visio_cell("X", width, "Width")}
+          {visio_cell("Y", height, "Height")}
         </Row>
         <Row T="LineTo" IX="4">
           <Cell N="X" V="0"/>
-          <Cell N="Y" V="{visio_number(height)}"/>
+          {visio_cell("Y", height, "Height")}
         </Row>
         <Row T="LineTo" IX="5">
           <Cell N="X" V="0"/>
@@ -906,6 +931,10 @@ def visio_vdx_shape_xml(
     line_weight = max(0.01, 0.01 * penwidth)
     font_size = visio_label_font_size(node)
     text_height, text_pin_y, text_pin_x, vertical_align = visio_text_block_layout(node, label, width, height)
+    text_width_formula, text_height_formula, text_pin_x_formula, text_pin_y_formula = visio_text_block_formulas(
+        node, text_height
+    )
+    text_width = max(0.5, width - 0.25)
     shape_name = xml_escape(f"{node.module_name}_{shape_id}")
     return f"""      <Shape ID="{shape_id}" Name="{xml_escape(node.module_name)}" NameU="{shape_name}" Type="Shape" LineStyle="0" FillStyle="0" TextStyle="0">
         <XForm>
@@ -913,8 +942,8 @@ def visio_vdx_shape_xml(
           <PinY>{visio_number(pin_y)}</PinY>
           <Width>{visio_number(width)}</Width>
           <Height>{visio_number(height)}</Height>
-          <LocPinX>{visio_number(loc_pin_x)}</LocPinX>
-          <LocPinY>{visio_number(loc_pin_y)}</LocPinY>
+          {visio_vdx_value("LocPinX", loc_pin_x, "Width*0.5")}
+          {visio_vdx_value("LocPinY", loc_pin_y, "Height*0.5")}
         </XForm>
         <Line>
           <LineColor>{border}</LineColor>
@@ -925,10 +954,10 @@ def visio_vdx_shape_xml(
           <FillPattern>1</FillPattern>
         </Fill>
         <TextBlock>
-          <TxtWidth>{visio_number(max(0.5, width - 0.25))}</TxtWidth>
-          <TxtHeight>{visio_number(text_height)}</TxtHeight>
-          <TxtPinX>{visio_number(text_pin_x)}</TxtPinX>
-          <TxtPinY>{visio_number(text_pin_y)}</TxtPinY>
+          {visio_vdx_value("TxtWidth", text_width, text_width_formula)}
+          {visio_vdx_value("TxtHeight", text_height, text_height_formula)}
+          {visio_vdx_value("TxtPinX", text_pin_x, text_pin_x_formula)}
+          {visio_vdx_value("TxtPinY", text_pin_y, text_pin_y_formula)}
           <VerticalAlign>{vertical_align}</VerticalAlign>
         </TextBlock>
         <Char IX="0">
@@ -948,16 +977,16 @@ def visio_vdx_shape_xml(
             <Y>0</Y>
           </MoveTo>
           <LineTo IX="2">
-            <X>{visio_number(width)}</X>
+            {visio_vdx_value("X", width, "Width")}
             <Y>0</Y>
           </LineTo>
           <LineTo IX="3">
-            <X>{visio_number(width)}</X>
-            <Y>{visio_number(height)}</Y>
+            {visio_vdx_value("X", width, "Width")}
+            {visio_vdx_value("Y", height, "Height")}
           </LineTo>
           <LineTo IX="4">
             <X>0</X>
-            <Y>{visio_number(height)}</Y>
+            {visio_vdx_value("Y", height, "Height")}
           </LineTo>
           <LineTo IX="5">
             <X>0</X>
