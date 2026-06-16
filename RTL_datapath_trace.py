@@ -1007,20 +1007,6 @@ def trace_node_label(ref: SignalRef, max_chars: int) -> str:
     return "\n".join(lines)
 
 
-def trace_edge_label(text: str, max_chars: int) -> str:
-    lines: List[str] = []
-    for token in text.split():
-        if not lines:
-            lines.extend(wrap_text_chunks(token, max_chars))
-            continue
-        candidate = f"{lines[-1]} {token}"
-        if len(candidate) <= max_chars:
-            lines[-1] = candidate
-        else:
-            lines.extend(wrap_text_chunks(token, max_chars))
-    return "\n".join(lines or [text])
-
-
 def emit_trace_excalidraw(result: TraceResult) -> str:
     path_refs = [result.start]
     for edge in result.main_path:
@@ -1110,15 +1096,19 @@ def emit_trace_excalidraw(result: TraceResult) -> str:
             }
         )
         elements.append(arrow)
-        rename = f"{edge.src.signal} -> {edge.dst.signal}" if edge.src.signal != edge.dst.signal else edge.action
-        rename_label = trace_edge_label(rename, 14)
-        rename_lines = rename_label.count("\n") + 1
-        label_width = 108
-        label_height = max(22, rename_lines * 14 * 1.2 + 6)
+        if edge.src.signal != edge.dst.signal:
+            if result.direction == "reverse":
+                rename_label = f"{edge.dst.signal} -> {edge.src.signal}"
+            else:
+                rename_label = f"{edge.src.signal} -> {edge.dst.signal}"
+        else:
+            rename_label = edge.action
+        label_width = max(110, len(rename_label) * 8 + 18)
+        label_height = 22
         label_x = min(start_x, end_x) + (abs(end_x - start_x) - label_width) / 2
         label_y = y + node_height + 14
         label = excalidraw_base_element(
-            f"trace-label-{index}-{stable_int(rename):08x}",
+            f"trace-label-{index}-{stable_int(rename_label):08x}",
             "text",
             label_x,
             label_y,
@@ -1136,7 +1126,7 @@ def emit_trace_excalidraw(result: TraceResult) -> str:
                 "rawText": rename_label,
                 "textAlign": "center",
                 "verticalAlign": "middle",
-                "baseline": 14 * 1.2 * rename_lines,
+                "baseline": 17,
                 "containerId": None,
                 "originalText": rename_label,
                 "lineHeight": 1.2,

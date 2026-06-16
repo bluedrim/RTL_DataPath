@@ -94,7 +94,7 @@ Trace behavior:
 - Writes the path-only summary to `--output` or `trace_<signal>.txt`.
 - If `--signal <file>` is used, traces every listed signal in order and writes all results to `--output` or `trace_<signal_file_stem>.txt`.
 - Missing signals are reported as `[ERROR] <signal>: ...` and the command exits non-zero after writing the output file.
-- Writes `rtl_datapath_trace.excalidraw`, showing the main path with arrows, wrapped hierarchy labels inside blocks, and signal rename labels below blocks.
+- Writes `rtl_datapath_trace.excalidraw`, showing the main path with arrows, wrapped hierarchy labels inside blocks, and one-line direction-aware signal rename labels below blocks.
 
 Options:
 
