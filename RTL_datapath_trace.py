@@ -6,7 +6,9 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import re
+import shlex
 from collections import deque
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -19,6 +21,9 @@ PORT_BLOCK_RE = re.compile(r"\bmodule\s+[A-Za-z_][A-Za-z0-9_$]*\s*(?:#\s*\([^;]*
 IDENT_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_$]*")
 COMMENT_LINE_RE = re.compile(r"//.*?$", re.M)
 COMMENT_BLOCK_RE = re.compile(r"/\*.*?\*/", re.S)
+ENV_VAR_PAREN_RE = re.compile(r"\$\(([A-Za-z_][A-Za-z0-9_]*)\)")
+RTL_FILE_EXTENSIONS = {".v", ".sv", ".vh", ".svh"}
+FILELIST_EXTENSIONS = {".f", ".flist", ".lst", ".list"}
 DECL_PORT_RE = re.compile(r"\b(input|output|inout)\b([^;]*);", re.S)
 ASSIGN_RE = re.compile(r"^\s*assign\s+(.+?)\s*=\s*(.+?)\s*$", re.S)
 PROC_ASSIGN_RE = re.compile(r"([A-Za-z_][A-Za-z0-9_$]*(?:\s*\[[^\]]+\])?)\s*(<=|=)\s*(.+)$", re.S)
@@ -157,31 +162,86 @@ def strip_comments(text: str) -> str:
     return COMMENT_LINE_RE.sub("", text)
 
 
+def split_filelist_line(raw: str) -> List[str]:
+    line = raw.split("//", 1)[0].split("#", 1)[0].strip()
+    if not line:
+        return []
+    try:
+        return shlex.split(line)
+    except ValueError:
+        return line.split()
+
+
+def expand_filelist_token(token: str) -> str:
+    def replace_make_var(match: re.Match[str]) -> str:
+        name = match.group(1)
+        return os.environ.get(name, match.group(0))
+
+    expanded = ENV_VAR_PAREN_RE.sub(replace_make_var, token)
+    expanded = os.path.expandvars(expanded)
+    return os.path.expanduser(expanded)
+
+
+def resolve_filelist_entry(base: Path, token: str) -> Path:
+    candidate = Path(expand_filelist_token(token))
+    if not candidate.is_absolute():
+        candidate = (base / candidate).resolve()
+    return candidate
+
+
 def parse_filelist(path: Path) -> List[Path]:
     files: List[Path] = []
-    base = path.parent
+    seen_files: Set[Path] = set()
+    seen_filelists: Set[Path] = set()
 
-    for raw in path.read_text(encoding="utf-8").splitlines():
-        line = raw.strip()
-        if not line or line.startswith("#") or line.startswith("//"):
-            continue
-        if line.startswith("+incdir+"):
-            continue
-        if line.startswith("-y") or line.startswith("-v"):
-            tokens = line.split(maxsplit=1)
-            if len(tokens) == 2 and tokens[0] == "-v":
-                candidate = (base / tokens[1]).resolve()
-                if candidate.exists():
-                    files.append(candidate)
-            continue
-
-        candidate = Path(line)
-        if not candidate.is_absolute():
-            candidate = (base / candidate).resolve()
-        if candidate.suffix.lower() in {".v", ".sv", ".vh", ".svh"} and candidate.exists():
+    def add_rtl_file(candidate: Path) -> None:
+        candidate = candidate.resolve()
+        if candidate in seen_files:
+            return
+        if candidate.suffix.lower() in RTL_FILE_EXTENSIONS and candidate.exists():
+            seen_files.add(candidate)
             files.append(candidate)
 
-    return sorted(set(files))
+    def visit_filelist(filelist: Path) -> None:
+        filelist = filelist.resolve()
+        if filelist in seen_filelists or not filelist.exists():
+            return
+        seen_filelists.add(filelist)
+        base = filelist.parent
+
+        for raw in filelist.read_text(encoding="utf-8").splitlines():
+            tokens = split_filelist_line(raw)
+            if not tokens:
+                continue
+            first = tokens[0]
+            if first.startswith("+incdir+"):
+                continue
+            if first == "-y" or first.startswith("-y"):
+                continue
+            if first == "-v" and len(tokens) >= 2:
+                add_rtl_file(resolve_filelist_entry(base, tokens[1]))
+                continue
+            if first in {"-f", "-F"} and len(tokens) >= 2:
+                visit_filelist(resolve_filelist_entry(base, tokens[1]))
+                continue
+            if first.startswith("-f") and len(first) > 2:
+                visit_filelist(resolve_filelist_entry(base, first[2:]))
+                continue
+            if first.startswith("-F") and len(first) > 2:
+                visit_filelist(resolve_filelist_entry(base, first[2:]))
+                continue
+            if first.startswith("-"):
+                continue
+
+            candidate = resolve_filelist_entry(base, first)
+            suffix = candidate.suffix.lower()
+            if suffix in RTL_FILE_EXTENSIONS:
+                add_rtl_file(candidate)
+            elif suffix in FILELIST_EXTENSIONS:
+                visit_filelist(candidate)
+
+    visit_filelist(resolve_filelist_entry(Path.cwd(), str(path)))
+    return files
 
 
 def split_top_level_commas(text: str) -> List[str]:

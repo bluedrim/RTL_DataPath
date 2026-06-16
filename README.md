@@ -53,6 +53,10 @@ python3 RTL_blockdiagram.py ./rte/filelist.f 3 \
 ## Filelist Support
 
 - Verilog/SystemVerilog file paths: `.v`, `.sv`, `.vh`, `.svh`
+- Nested filelists through `-f <filelist>`, `-F <filelist>`, `-ffilelist`, `-Ffilelist`, or plain `.f`, `.flist`, `.lst`, `.list` entries.
+- Relative paths are resolved from the filelist that contains each entry.
+- Environment variables in paths are expanded: `$VAR`, `${VAR}`, `$(VAR)`, and `~`.
+- Repeated filelists and repeated RTL files are processed only once.
 - `+incdir+...` entries are accepted and ignored during parsing.
 - `-v <file>`
 - Comments and blank lines
