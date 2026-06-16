@@ -158,12 +158,6 @@ class TraceResult:
     all_paths: List[List[TraceEdge]]
 
 
-class MultipleTopCandidatesError(ValueError):
-    def __init__(self, candidates: List[str]) -> None:
-        self.candidates = candidates
-        super().__init__("Multiple TOP candidates found.")
-
-
 def strip_comments(text: str) -> str:
     text = COMMENT_BLOCK_RE.sub("", text)
     return COMMENT_LINE_RE.sub("", text)
@@ -547,12 +541,29 @@ def build_design(filelist: Path, explicit_top: str | None) -> Design:
     top_candidates = infer_top_candidates(modules)
     top = explicit_top
     if not top:
-        if len(top_candidates) > 1:
-            raise MultipleTopCandidatesError(top_candidates)
         top, top_candidates = infer_top(modules)
     if top not in modules:
         raise ValueError(f"Top module '{top}' not found in parsed modules.")
     return Design(modules=modules, top=top, top_candidates=top_candidates, top_is_explicit=bool(explicit_top))
+
+
+def signal_root_module(signal_path: str, modules: Dict[str, Module]) -> str | None:
+    parts = [part for part in signal_path.split(".") if part]
+    if len(parts) < 2:
+        return None
+    return parts[0] if parts[0] in modules else None
+
+
+def apply_signal_root(design: Design, signal_path: str) -> Design:
+    implied_top = signal_root_module(signal_path, design.modules)
+    if not implied_top or implied_top == design.top:
+        return design
+    return Design(
+        modules=design.modules,
+        top=implied_top,
+        top_candidates=design.top_candidates,
+        top_is_explicit=design.top_is_explicit,
+    )
 
 
 def build_hierarchy(design: Design) -> HierNode:
@@ -1071,32 +1082,6 @@ def safe_trace_filename(signal: str) -> Path:
     return Path(f"trace_{safe}.txt")
 
 
-def quote_cli_arg(value: object) -> str:
-    return shlex.quote(str(value))
-
-
-def format_multiple_top_message(prog: str, filelist: Path, signal: str, candidates: List[str]) -> str:
-    lines = [f"[ERROR] Multiple TOP candidates found ({len(candidates)}).", "Specify one with --top <module>.", ""]
-    lines.append("TOP candidates:")
-    lines.extend(f"  - {candidate}" for candidate in candidates)
-    lines.extend(["", "Command examples:"])
-    for candidate in candidates:
-        lines.append(
-            "  "
-            + " ".join(
-                [
-                    "python3",
-                    quote_cli_arg(prog),
-                    quote_cli_arg(filelist),
-                    quote_cli_arg(signal),
-                    "--top",
-                    quote_cli_arg(candidate),
-                ]
-            )
-        )
-    return "\n".join(lines)
-
-
 def main() -> None:
     parser = argparse.ArgumentParser(description="Trace a datapath from a hierarchical RTL signal.")
     parser.add_argument("filelist", type=Path, help="Path to Verilog/SystemVerilog filelist")
@@ -1117,10 +1102,9 @@ def main() -> None:
     parser.add_argument("--max-steps", type=int, default=1000, help="Maximum trace expansion steps")
     args = parser.parse_args()
 
-    try:
-        design = build_design(args.filelist, args.top)
-    except MultipleTopCandidatesError as exc:
-        parser.exit(2, format_multiple_top_message(parser.prog, args.filelist, args.signal, exc.candidates) + "\n")
+    design = build_design(args.filelist, args.top)
+    if not args.top:
+        design = apply_signal_root(design, args.signal)
     root = build_hierarchy(design)
     start = resolve_start(root, args.signal)
     result = trace_datapath(design, root, start, max_steps=args.max_steps, requested_direction=args.direction)

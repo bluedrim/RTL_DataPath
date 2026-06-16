@@ -87,7 +87,7 @@ Trace behavior:
 
 Options:
 
-- `--top <module>`: override the inferred root module.
+- `--top <module>`: trace from the specified root module. If omitted, the tracer uses the first signal-path token when it matches a parsed module, otherwise the inferred root.
 - `--excalidraw <path>`: choose the Excalidraw output path.
 - `--direction auto|forward|reverse`: choose trace direction. `auto` traces output ports backward and other signals forward.
 - `--max-steps <N>`: cap trace expansion.
