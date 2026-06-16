@@ -33,7 +33,7 @@ Layout rules:
 
 - Child blocks are wrapped after 4 modules per row, then continue on the next row.
 - Each next row starts below the tallest block in the previous row, with additional vertical spacing.
-- TOP labels use a larger centered font; intermediate labels are horizontally centered, and leaf labels are centered horizontally and vertically.
+- TOP labels use a larger horizontally centered font; intermediate labels are horizontally centered, and leaf labels are centered horizontally and vertically.
 
 Outputs:
 
@@ -77,17 +77,19 @@ Trace behavior:
 
 - Follows named instance port connections, continuous `assign`, and simple procedural assignments.
 - Continues through renames such as `assign stage_data = i_data`.
+- Supports output-port tracing. If the start signal is an `output`, `auto` mode traces backward from output to its source signals.
 - Stops and prints a stop record when the signal enters conditional logic such as `if`, `case`, or a conditional procedural assignment.
-- Selects `MAIN` by preferring paths that reach output ports with signal names similar to the input.
+- Selects `MAIN` by preferring paths that reach output ports for forward traces or input ports for reverse traces.
 - Prints path summaries as `[PATH_0]`, `[PATH_1]`, and so on; console output also prints `MAIN` and `LONGEST` at the end.
 - Wraps each path block with `//{{{ <final_signal>` and `//}}}` fold markers.
-- Writes the path-only summary to `trace_<input_signal>.txt`.
+- Writes the path-only summary to `trace_<signal>.txt`.
 - Writes `rtl_datapath_trace.excalidraw`, showing the main path with arrows and signal rename labels.
 
 Options:
 
 - `--top <module>`: override the inferred root module.
 - `--excalidraw <path>`: choose the Excalidraw output path.
+- `--direction auto|forward|reverse`: choose trace direction. `auto` traces output ports backward and other signals forward.
 - `--max-steps <N>`: cap trace expansion.
 
 The tracer currently focuses on named port connections and lightweight expression matching.

@@ -490,7 +490,7 @@ def emit_dot(design: Design, depth_limit: int = 0, show_instances: bool = False)
         lines.append(f'{prefix}subgraph "{cluster_id}" {{')
         lines.append(f'{prefix}  label="{label}";')
         lines.append(f'{prefix}  labeljust="c";')
-        lines.append(f'{prefix}  labelloc="{"c" if not node.children else "t"}";')
+        lines.append(f'{prefix}  labelloc="{"t" if node.depth == 0 or node.children else "c"}";')
         lines.append(f'{prefix}  style="rounded,filled";')
         lines.append(f'{prefix}  fillcolor="{fill}";')
         lines.append(f'{prefix}  color="{border}";')
@@ -571,11 +571,11 @@ def excalidraw_label_box(
     text_height = max(font_size * 1.2 * label_line_count(label), font_size + 8)
     width = max(1, node.width - LABEL_HORIZONTAL_PAD * 2)
 
-    if not node.children:
-        return x + LABEL_HORIZONTAL_PAD, y, width, node.height, "middle"
     if node.depth == 0:
         height = max(text_height, HEADER_HEIGHT - LABEL_TOP_PAD)
-        return x + LABEL_HORIZONTAL_PAD, y + LABEL_TOP_PAD / 2, width, height, "middle"
+        return x + LABEL_HORIZONTAL_PAD, y + LABEL_TOP_PAD, width, height, "top"
+    if not node.children:
+        return x + LABEL_HORIZONTAL_PAD, y, width, node.height, "middle"
     height = max(text_height, HEADER_HEIGHT - LABEL_TOP_PAD)
     return x + LABEL_HORIZONTAL_PAD, y + LABEL_TOP_PAD, width, height, "top"
 
@@ -668,12 +668,12 @@ def px_to_visio(value: float) -> float:
 
 def visio_text_block_layout(node: HierarchyNode, label: str, width: float, height: float) -> Tuple[float, float, float, int]:
     nominal_height = 0.28 * label_line_count(label) + 0.17
-    if not node.children:
-        return max(0.45, height), height / 2, width / 2, 1
     if node.depth == 0:
         text_height = max(px_to_visio(HEADER_HEIGHT - LABEL_TOP_PAD), nominal_height)
-        text_pin_y = max(text_height / 2, height - text_height / 2 - px_to_visio(LABEL_TOP_PAD / 2))
-        return text_height, text_pin_y, width / 2, 1
+        text_pin_y = max(text_height / 2, height - text_height / 2 - px_to_visio(LABEL_TOP_PAD))
+        return text_height, text_pin_y, width / 2, 0
+    if not node.children:
+        return max(0.45, height), height / 2, width / 2, 1
     text_height = max(px_to_visio(HEADER_HEIGHT - LABEL_TOP_PAD), nominal_height)
     text_pin_y = max(text_height / 2, height - text_height / 2 - px_to_visio(LABEL_TOP_PAD))
     return text_height, text_pin_y, width / 2, 0

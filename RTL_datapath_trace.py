@@ -149,6 +149,7 @@ class TraceEdge:
 @dataclass
 class TraceResult:
     start: SignalRef
+    direction: str
     edges: List[TraceEdge]
     terminal_refs: List[SignalRef]
     stop_edges: List[TraceEdge]
@@ -656,32 +657,57 @@ def ref_direction(design: Design, ref: SignalRef) -> str:
     return module.port_directions.get(ref.signal, "unknown")
 
 
-def path_score(design: Design, root: HierNode, start: SignalRef, path: List[TraceEdge]) -> Tuple[int, int, int, int, int]:
+def path_score(
+    design: Design,
+    root: HierNode,
+    start: SignalRef,
+    path: List[TraceEdge],
+    trace_direction: str,
+) -> Tuple[int, int, int, int, int]:
     refs = refs_for_path(start, path)
     terminal = refs[-1]
     direction = ref_direction(design, terminal)
-    if direction in {"output", "inout"} and terminal.path == root.path:
-        output_rank = 3
-    elif direction in {"output", "inout"}:
-        output_rank = 2
+    target_directions = {"input", "inout"} if trace_direction == "reverse" else {"output", "inout"}
+    if direction in target_directions and terminal.path == root.path:
+        terminal_rank = 3
+    elif direction in target_directions:
+        terminal_rank = 2
     else:
-        output_rank = 0
+        terminal_rank = 0
     final_similarity = int(signal_name_similarity(start.signal, terminal.signal) * 1000)
-    best_output_similarity = max(
-        (signal_name_similarity(start.signal, ref.signal) for ref in refs if ref_direction(design, ref) in {"output", "inout"}),
+    best_target_similarity = max(
+        (
+            signal_name_similarity(start.signal, ref.signal)
+            for ref in refs
+            if ref_direction(design, ref) in target_directions
+        ),
         default=0.0,
     )
     clean_rank = 0 if any(edge.stopped for edge in path) else 1
     return (
-        output_rank,
-        int(best_output_similarity * 1000),
+        terminal_rank,
+        int(best_target_similarity * 1000),
         final_similarity,
         clean_rank,
         len(path),
     )
 
 
-def trace_datapath(design: Design, root: HierNode, start: SignalRef, max_steps: int = 1000) -> TraceResult:
+def resolve_trace_direction(design: Design, start: SignalRef, requested_direction: str = "auto") -> str:
+    if requested_direction in {"forward", "reverse"}:
+        return requested_direction
+    start_direction = ref_direction(design, start)
+    return "reverse" if start_direction == "output" else "forward"
+
+
+def trace_datapath(
+    design: Design,
+    root: HierNode,
+    start: SignalRef,
+    max_steps: int = 1000,
+    requested_direction: str = "auto",
+) -> TraceResult:
+    trace_direction = resolve_trace_direction(design, start, requested_direction)
     queue: deque[Tuple[SignalRef, List[TraceEdge]]] = deque([(start, [])])
     visited: Set[Tuple[Tuple[str, ...], str]] = set()
     edges: List[TraceEdge] = []
@@ -700,6 +726,7 @@ def trace_datapath(design: Design, root: HierNode, start: SignalRef, max_steps: 
         node = node_by_path(root, current.path)
         module = design.modules[current.module_name]
         advanced = False
+        stopped_here = False
 
         for kind, signals, expr in module.condition_uses:
             if current.signal in signals:
@@ -714,26 +741,36 @@ def trace_datapath(design: Design, root: HierNode, start: SignalRef, max_steps: 
                 stop_edges.append(stop)
                 edges.append(stop)
                 terminal_paths.append(path_edges + [stop])
+                stopped_here = True
 
         for assignment in module.assignments:
-            if current.signal not in assignment.rhs_signals:
-                continue
-            for lhs_signal in assignment.lhs_signals:
-                dst = SignalRef(path=current.path, module_name=current.module_name, signal=lhs_signal)
-                detail = f"{assignment.kind}: {assignment.lhs} = {assignment.rhs}"
-                if assignment.conditional:
-                    stop = TraceEdge(
-                        src=current,
-                        dst=dst,
-                        action="conditional assignment",
-                        detail=detail,
-                        stopped=True,
-                        reason="assignment is under conditional logic",
-                    )
-                    stop_edges.append(stop)
-                    edges.append(stop)
-                    terminal_paths.append(path_edges + [stop])
+            detail = f"{assignment.kind}: {assignment.lhs} = {assignment.rhs}"
+            if trace_direction == "forward":
+                if current.signal not in assignment.rhs_signals:
                     continue
+                next_signals = assignment.lhs_signals
+            else:
+                if current.signal not in assignment.lhs_signals:
+                    continue
+                next_signals = assignment.rhs_signals
+
+            if assignment.conditional:
+                stop = TraceEdge(
+                    src=current,
+                    dst=current,
+                    action="conditional assignment",
+                    detail=detail,
+                    stopped=True,
+                    reason="assignment is under conditional logic",
+                )
+                stop_edges.append(stop)
+                edges.append(stop)
+                terminal_paths.append(path_edges + [stop])
+                stopped_here = True
+                continue
+
+            for next_signal in next_signals:
+                dst = SignalRef(path=current.path, module_name=current.module_name, signal=next_signal)
                 edge = TraceEdge(src=current, dst=dst, action="assign", detail=detail)
                 edges.append(edge)
                 queue.append((dst, path_edges + [edge]))
@@ -746,16 +783,23 @@ def trace_datapath(design: Design, root: HierNode, start: SignalRef, max_steps: 
                 if port_name.startswith("__pos"):
                     continue
                 direction = child_module.port_directions.get(port_name, "unknown")
-                if direction == "output":
+                if trace_direction == "forward" and direction == "output":
+                    continue
+                if trace_direction == "reverse" and direction == "input":
                     continue
                 if not signal_in_expr(current.signal, expr):
                     continue
                 dst = SignalRef(path=child.path, module_name=child.module_name, signal=port_name)
+                detail = (
+                    f"{child.inst_name}.{port_name} <= {expr}"
+                    if trace_direction == "forward"
+                    else f"{expr} <= {child.inst_name}.{port_name}"
+                )
                 edge = TraceEdge(
                     src=current,
                     dst=dst,
                     action="enter block",
-                    detail=f"{child.inst_name}.{port_name} <= {expr}",
+                    detail=detail,
                 )
                 edges.append(edge)
                 queue.append((dst, path_edges + [edge]))
@@ -763,22 +807,31 @@ def trace_datapath(design: Design, root: HierNode, start: SignalRef, max_steps: 
 
         if node.parent and node.parent_instance:
             direction = module.port_directions.get(current.signal, "unknown")
-            if direction in {"output", "inout", "unknown"}:
+            if trace_direction == "forward":
+                can_cross_to_parent = direction in {"output", "inout", "unknown"}
+            else:
+                can_cross_to_parent = direction in {"input", "inout", "unknown"}
+            if can_cross_to_parent:
                 expr = node.parent_instance.connections.get(current.signal)
                 if expr:
                     for parent_signal in connected_expr_signal(expr):
                         dst = SignalRef(path=node.parent.path, module_name=node.parent.module_name, signal=parent_signal)
+                        detail = (
+                            f"{node.inst_name}.{current.signal} => {expr}"
+                            if trace_direction == "forward"
+                            else f"{node.inst_name}.{current.signal} <= {expr}"
+                        )
                         edge = TraceEdge(
                             src=current,
                             dst=dst,
                             action="leave block",
-                            detail=f"{node.inst_name}.{current.signal} => {expr}",
+                            detail=detail,
                         )
                         edges.append(edge)
                         queue.append((dst, path_edges + [edge]))
                         advanced = True
 
-        if not advanced:
+        if not advanced and not stopped_here:
             terminal_refs.append(current)
             terminal_paths.append(path_edges)
 
@@ -791,10 +844,15 @@ def trace_datapath(design: Design, root: HierNode, start: SignalRef, max_steps: 
         seen_path_keys.add(path_key)
         unique_paths.append(path)
 
-    main_path = max(unique_paths, key=lambda path: path_score(design, root, start, path)) if unique_paths else []
+    main_path = (
+        max(unique_paths, key=lambda path: path_score(design, root, start, path, trace_direction))
+        if unique_paths
+        else []
+    )
     longest_path = max(unique_paths, key=len) if unique_paths else []
     return TraceResult(
         start=start,
+        direction=trace_direction,
         edges=edges,
         terminal_refs=terminal_refs,
         stop_edges=stop_edges,
@@ -1050,6 +1108,12 @@ def main() -> None:
         default=Path("rtl_datapath_trace.excalidraw"),
         help="Output Excalidraw file for the main trace path",
     )
+    parser.add_argument(
+        "--direction",
+        choices=["auto", "forward", "reverse"],
+        default="auto",
+        help="Trace direction. auto traces output ports backward and other signals forward.",
+    )
     parser.add_argument("--max-steps", type=int, default=1000, help="Maximum trace expansion steps")
     args = parser.parse_args()
 
@@ -1059,7 +1123,7 @@ def main() -> None:
         parser.exit(2, format_multiple_top_message(parser.prog, args.filelist, args.signal, exc.candidates) + "\n")
     root = build_hierarchy(design)
     start = resolve_start(root, args.signal)
-    result = trace_datapath(design, root, start, max_steps=args.max_steps)
+    result = trace_datapath(design, root, start, max_steps=args.max_steps, requested_direction=args.direction)
     text_path = safe_trace_filename(args.signal)
     path_lines = path_summary_lines(result)
     args.excalidraw.write_text(emit_trace_excalidraw(result), encoding="utf-8")
