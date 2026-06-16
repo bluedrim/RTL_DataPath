@@ -73,6 +73,12 @@ Complex macro-heavy or `generate`-heavy RTL may not be parsed perfectly because 
 python3 RTL_datapath_trace.py ./rte/filelist.f tb_top.top.i_data
 ```
 
+You can also pass a signal file with one signal per line:
+
+```bash
+python3 RTL_datapath_trace.py ./rte/filelist.f --signal signals.txt --output traces.txt
+```
+
 Trace behavior:
 
 - Follows named instance port connections, continuous `assign`, and simple procedural assignments.
@@ -82,14 +88,19 @@ Trace behavior:
 - Stops and prints a stop record when the signal enters conditional logic such as `if`, `case`, or a conditional procedural assignment.
 - Selects `MAIN` by preferring paths that reach output ports for forward traces or input ports for reverse traces.
 - Prints path summaries as `[PATH_0]`, `[PATH_1]`, and so on; console output also prints `MAIN` and `LONGEST` at the end.
+- Wraps the whole trace with a title fold marker: `//{{{<start_signal>` through the final `//}}}`.
 - Wraps each path block with `//{{{ <final_signal>` and `//}}}` fold markers.
-- Writes the path-only summary to `trace_<signal>.txt`.
+- Writes the path-only summary to `--output` or `trace_<signal>.txt`.
+- If `--signal <file>` is used, traces every listed signal in order and writes all results to `--output` or `trace_<signal_file_stem>.txt`.
+- Missing signals are reported as `[ERROR] <signal>: ...` and the command exits non-zero after writing the output file.
 - Writes `rtl_datapath_trace.excalidraw`, showing the main path with arrows and signal rename labels.
 
 Options:
 
 - `--top <module>`: trace from the specified root module. If omitted, the tracer uses the first signal-path token when it matches a parsed module, otherwise the inferred root.
+- `--signal <path>`: read one signal per line from a file instead of using a positional single signal.
 - `--excalidraw <path>`: choose the Excalidraw output path.
+- `--output <path>` or `-o <path>`: choose the text output file.
 - `--direction auto|forward|reverse`: choose trace direction. `auto` traces output ports backward and other signals forward.
 - `--max-steps <N>`: cap trace expansion.
 

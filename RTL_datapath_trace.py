@@ -587,6 +587,54 @@ def build_hierarchy(design: Design) -> HierNode:
     return expand(design.top, None, (design.top,), None, None, {design.top})
 
 
+def declaration_signals(body: str) -> List[str]:
+    signals: List[str] = []
+    seen: Set[str] = set()
+    for match in re.finditer(r"\b(?:wire|reg|logic|bit)\b([^;]*);", body, re.S):
+        for signal in expression_signals(match.group(1)):
+            if signal not in seen:
+                seen.add(signal)
+                signals.append(signal)
+    return signals
+
+
+def module_known_signals(design: Design, module_name: str) -> List[str]:
+    module = design.modules[module_name]
+    signals: List[str] = []
+    seen: Set[str] = set()
+
+    def add(signal: str) -> None:
+        if signal not in seen:
+            seen.add(signal)
+            signals.append(signal)
+
+    for signal in module.ports:
+        add(signal)
+    for signal in module.port_directions:
+        add(signal)
+    for signal in declaration_signals(module.body):
+        add(signal)
+    for assignment in module.assignments:
+        for signal in assignment.lhs_signals + assignment.rhs_signals:
+            add(signal)
+    for _, condition_signals, _ in module.condition_uses:
+        for signal in condition_signals:
+            add(signal)
+    for instance in module.instances:
+        for port_name, expr in instance.connections.items():
+            if port_name.startswith("__pos"):
+                continue
+            for signal in expression_signals(expr):
+                add(signal)
+    return signals
+
+
+def validate_start_signal(design: Design, start: SignalRef) -> None:
+    known_signals = module_known_signals(design, start.module_name)
+    if not signal_in_signals(start.signal, known_signals):
+        raise ValueError(f"Signal '{start.signal}' not found in module '{start.module_name}'.")
+
+
 def iter_hierarchy(node: HierNode) -> Iterable[HierNode]:
     yield node
     for child in node.children:
@@ -1088,6 +1136,10 @@ def named_path_summary_lines(result: TraceResult, name: str, path: List[TraceEdg
     return lines
 
 
+def titled_trace_lines(result: TraceResult, lines: List[str]) -> List[str]:
+    return ["//{{{" + result.start.label()] + lines + ["//}}}"]
+
+
 def print_lines(lines: List[str]) -> None:
     for line in lines:
         print(line)
@@ -1100,16 +1152,81 @@ def safe_trace_filename(signal: str) -> Path:
     return Path(f"trace_{safe}.txt")
 
 
+def safe_signal_suffix(signal: str) -> str:
+    safe = re.sub(r"[^A-Za-z0-9_.$]+", "_", signal).strip("_")
+    return safe or "signal"
+
+
+def ensure_parent_dir(path: Path) -> None:
+    parent = path.parent
+    if parent != Path("."):
+        parent.mkdir(parents=True, exist_ok=True)
+
+
+def strip_signal_line(raw: str) -> str:
+    return raw.split("//", 1)[0].split("#", 1)[0].strip()
+
+
+def read_signal_file(path: Path) -> List[str]:
+    signals: List[str] = []
+    for raw in path.read_text(encoding="utf-8").splitlines():
+        signal = strip_signal_line(raw)
+        if signal:
+            signals.append(signal)
+    return signals
+
+
+def excalidraw_path_for_signal(base_path: Path, signal: str, multiple_signals: bool) -> Path:
+    if not multiple_signals:
+        return base_path
+    suffix = safe_signal_suffix(signal)
+    return base_path.with_name(f"{base_path.stem}_{suffix}{base_path.suffix or '.excalidraw'}")
+
+
+def trace_lines_for_signal(
+    base_design: Design,
+    signal: str,
+    explicit_top: str | None,
+    max_steps: int,
+    direction: str,
+    include_named_paths: bool,
+) -> Tuple[TraceResult, List[str]]:
+    design = base_design if explicit_top else apply_signal_root(base_design, signal)
+    root = build_hierarchy(design)
+    start = resolve_start(root, signal)
+    validate_start_signal(design, start)
+    result = trace_datapath(design, root, start, max_steps=max_steps, requested_direction=direction)
+    lines = path_summary_lines(result)
+    if include_named_paths:
+        lines += named_path_summary_lines(result, "MAIN", result.main_path, color=True)
+        lines += named_path_summary_lines(result, "LONGEST", result.longest_path, color=True)
+    return result, titled_trace_lines(result, lines)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Trace a datapath from a hierarchical RTL signal.")
     parser.add_argument("filelist", type=Path, help="Path to Verilog/SystemVerilog filelist")
-    parser.add_argument("signal", help="Hierarchical signal path, for example tb_top.top.i_data")
+    parser.add_argument("signal", nargs="?", help="Single hierarchical signal path, for example tb_top.top.i_data")
+    parser.add_argument(
+        "--signal",
+        dest="signal_file",
+        type=Path,
+        default=None,
+        help="File containing one hierarchical signal path per line.",
+    )
     parser.add_argument("--top", type=str, default=None, help="Root module override. Defaults to inferred TOP.")
     parser.add_argument(
         "--excalidraw",
         type=Path,
         default=Path("rtl_datapath_trace.excalidraw"),
         help="Output Excalidraw file for the main trace path",
+    )
+    parser.add_argument(
+        "--output",
+        "-o",
+        type=Path,
+        default=None,
+        help="Text output file. For signal-file input, all traces are written here in order.",
     )
     parser.add_argument(
         "--direction",
@@ -1120,24 +1237,60 @@ def main() -> None:
     parser.add_argument("--max-steps", type=int, default=1000, help="Maximum trace expansion steps")
     args = parser.parse_args()
 
-    design = build_design(args.filelist, args.top)
-    if not args.top:
-        design = apply_signal_root(design, args.signal)
-    root = build_hierarchy(design)
-    start = resolve_start(root, args.signal)
-    result = trace_datapath(design, root, start, max_steps=args.max_steps, requested_direction=args.direction)
-    text_path = safe_trace_filename(args.signal)
-    path_lines = path_summary_lines(result)
-    args.excalidraw.write_text(emit_trace_excalidraw(result), encoding="utf-8")
-    text_path.write_text(
-        "\n".join(path_lines) + "\n",
-        encoding="utf-8",
-    )
-    print_lines(
-        path_lines
-        + named_path_summary_lines(result, "MAIN", result.main_path, color=True)
-        + named_path_summary_lines(result, "LONGEST", result.longest_path, color=True)
-    )
+    if bool(args.signal) == bool(args.signal_file):
+        parser.error("provide either a single positional signal or --signal <signal_file>")
+
+    base_design = build_design(args.filelist, args.top)
+    signal_file = Path(expand_filelist_token(str(args.signal_file))).resolve() if args.signal_file else None
+    signals = read_signal_file(signal_file) if signal_file else [str(args.signal)]
+    if not signals:
+        parser.error(f"no signals found in signal file: {signal_file}")
+
+    multiple_signals = signal_file is not None
+    if args.output:
+        text_path = args.output
+    elif multiple_signals:
+        assert signal_file is not None
+        text_path = Path(f"trace_{signal_file.stem}.txt")
+    else:
+        text_path = safe_trace_filename(args.signal)
+
+    file_lines: List[str] = []
+    errors: List[str] = []
+
+    for index, signal in enumerate(signals):
+        if index:
+            file_lines.append("")
+            print()
+        try:
+            result, trace_file_lines = trace_lines_for_signal(
+                base_design=base_design,
+                signal=signal,
+                explicit_top=args.top,
+                max_steps=args.max_steps,
+                direction=args.direction,
+                include_named_paths=False,
+            )
+            console_body_lines = path_summary_lines(result)
+            console_body_lines += named_path_summary_lines(result, "MAIN", result.main_path, color=True)
+            console_body_lines += named_path_summary_lines(result, "LONGEST", result.longest_path, color=True)
+            trace_console_lines = titled_trace_lines(result, console_body_lines)
+            excalidraw_path = excalidraw_path_for_signal(args.excalidraw, signal, multiple_signals)
+            ensure_parent_dir(excalidraw_path)
+            excalidraw_path.write_text(emit_trace_excalidraw(result), encoding="utf-8")
+            file_lines.extend(trace_file_lines)
+            print_lines(trace_console_lines)
+        except ValueError as exc:
+            error_line = f"[ERROR] {signal}: {exc}"
+            errors.append(error_line)
+            error_block = ["//{{{" + signal, error_line, "//}}}"]
+            file_lines.extend(error_block)
+            print_lines(error_block)
+
+    ensure_parent_dir(text_path)
+    text_path.write_text("\n".join(file_lines) + "\n", encoding="utf-8")
+    if errors:
+        raise SystemExit(1)
 
 
 if __name__ == "__main__":
