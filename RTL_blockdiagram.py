@@ -74,6 +74,14 @@ MAX_CHILD_COLUMNS = 4
 OUTPUT_DIR = Path("output")
 VISIO_PX_PER_INCH = 96
 VISIO_PAGE_MARGIN = 60
+TOP_LABEL_FONT_SIZE = 34
+MODULE_LABEL_FONT_SIZE = 16
+TOP_DOT_LABEL_FONT_SIZE = 30
+MODULE_DOT_LABEL_FONT_SIZE = 16
+TOP_VISIO_LABEL_FONT_SIZE = 0.36
+MODULE_VISIO_LABEL_FONT_SIZE = 0.18
+LABEL_HORIZONTAL_PAD = 14
+LABEL_TOP_PAD = 10
 
 
 @dataclass
@@ -336,6 +344,22 @@ def hierarchy_label(node: HierarchyNode, show_instances: bool = False) -> str:
     return node.module_name
 
 
+def label_line_count(label: str) -> int:
+    return label.count("\n") + 1
+
+
+def excalidraw_label_font_size(node: HierarchyNode) -> int:
+    return TOP_LABEL_FONT_SIZE if node.depth == 0 else MODULE_LABEL_FONT_SIZE
+
+
+def dot_label_font_size(node: HierarchyNode) -> int:
+    return TOP_DOT_LABEL_FONT_SIZE if node.depth == 0 else MODULE_DOT_LABEL_FONT_SIZE
+
+
+def visio_label_font_size(node: HierarchyNode) -> float:
+    return TOP_VISIO_LABEL_FONT_SIZE if node.depth == 0 else MODULE_VISIO_LABEL_FONT_SIZE
+
+
 def child_rows(children: List[HierarchyNode]) -> List[List[HierarchyNode]]:
     if not children:
         return []
@@ -452,7 +476,7 @@ def emit_dot(design: Design, depth_limit: int = 0, show_instances: bool = False)
 
     lines = [
         "digraph RTL {",
-        '  graph [fontname="Helvetica", bgcolor="white", labeljust="l", labelloc="t", ranksep="1.0"];',
+        '  graph [fontname="Helvetica", bgcolor="white", labeljust="c", labelloc="t", ranksep="1.0"];',
         '  node [shape=point, style=invis, width=0.01, height=0.01, label=""];',
     ]
 
@@ -465,11 +489,14 @@ def emit_dot(design: Design, depth_limit: int = 0, show_instances: bool = False)
 
         lines.append(f'{prefix}subgraph "{cluster_id}" {{')
         lines.append(f'{prefix}  label="{label}";')
+        lines.append(f'{prefix}  labeljust="c";')
+        lines.append(f'{prefix}  labelloc="{"c" if not node.children else "t"}";')
         lines.append(f'{prefix}  style="rounded,filled";')
         lines.append(f'{prefix}  fillcolor="{fill}";')
         lines.append(f'{prefix}  color="{border}";')
         lines.append(f'{prefix}  penwidth={penwidth};')
         lines.append(f'{prefix}  fontname="Helvetica";')
+        lines.append(f'{prefix}  fontsize={dot_label_font_size(node)};')
         lines.append(f'{prefix}  "{anchor_id}";')
         rows = child_rows(node.children)
         for row_index, row in enumerate(rows):
@@ -534,6 +561,25 @@ def excalidraw_base_element(element_id: str, element_type: str, x: float, y: flo
     }
 
 
+def excalidraw_label_box(
+    node: HierarchyNode,
+    label: str,
+    x: float,
+    y: float,
+) -> Tuple[float, float, float, float, str]:
+    font_size = excalidraw_label_font_size(node)
+    text_height = max(font_size * 1.2 * label_line_count(label), font_size + 8)
+    width = max(1, node.width - LABEL_HORIZONTAL_PAD * 2)
+
+    if not node.children:
+        return x + LABEL_HORIZONTAL_PAD, y, width, node.height, "middle"
+    if node.depth == 0:
+        height = max(text_height, HEADER_HEIGHT - LABEL_TOP_PAD)
+        return x + LABEL_HORIZONTAL_PAD, y + LABEL_TOP_PAD / 2, width, height, "middle"
+    height = max(text_height, HEADER_HEIGHT - LABEL_TOP_PAD)
+    return x + LABEL_HORIZONTAL_PAD, y + LABEL_TOP_PAD, width, height, "top"
+
+
 def emit_excalidraw(design: Design, depth_limit: int = 0, show_instances: bool = False) -> str:
     tree = build_hierarchy_tree(design, depth_limit)
     compute_hierarchy_layout(tree)
@@ -546,8 +592,9 @@ def emit_excalidraw(design: Design, depth_limit: int = 0, show_instances: bool =
         fill, border, penwidth = module_style(design, node.module_name, node.depth)
         rect_id = f"module-{stable_int(*node.path, 'rect'):08x}"
         text_id = f"text-{stable_int(*node.path, 'text'):08x}"
-        font_size = 20 if node.depth == 0 else 16
+        font_size = excalidraw_label_font_size(node)
         label = hierarchy_label(node, show_instances)
+        text_x, text_y, text_width, text_height, vertical_align = excalidraw_label_box(node, label, x, y)
 
         rect = excalidraw_base_element(rect_id, "rectangle", x, y)
         rect.update(
@@ -563,20 +610,20 @@ def emit_excalidraw(design: Design, depth_limit: int = 0, show_instances: bool =
         )
         elements.append(rect)
 
-        text = excalidraw_base_element(text_id, "text", x + 14, y + 14)
+        text = excalidraw_base_element(text_id, "text", text_x, text_y)
         text.update(
             {
-                "width": max(120, node.width - 28),
-                "height": 32 if "\n" not in label else 44,
+                "width": text_width,
+                "height": text_height,
                 "strokeColor": "#1e1e1e",
                 "roughness": 0,
                 "fontSize": font_size,
                 "fontFamily": 1,
                 "text": label,
                 "rawText": label,
-                "textAlign": "left",
-                "verticalAlign": "top",
-                "baseline": font_size + 4,
+                "textAlign": "center",
+                "verticalAlign": vertical_align,
+                "baseline": font_size * 1.2 * label_line_count(label),
                 "containerId": None,
                 "originalText": label,
                 "lineHeight": 1.2,
@@ -619,6 +666,19 @@ def px_to_visio(value: float) -> float:
     return value / VISIO_PX_PER_INCH
 
 
+def visio_text_block_layout(node: HierarchyNode, label: str, width: float, height: float) -> Tuple[float, float, float, int]:
+    nominal_height = 0.28 * label_line_count(label) + 0.17
+    if not node.children:
+        return max(0.45, height), height / 2, width / 2, 1
+    if node.depth == 0:
+        text_height = max(px_to_visio(HEADER_HEIGHT - LABEL_TOP_PAD), nominal_height)
+        text_pin_y = max(text_height / 2, height - text_height / 2 - px_to_visio(LABEL_TOP_PAD / 2))
+        return text_height, text_pin_y, width / 2, 1
+    text_height = max(px_to_visio(HEADER_HEIGHT - LABEL_TOP_PAD), nominal_height)
+    text_pin_y = max(text_height / 2, height - text_height / 2 - px_to_visio(LABEL_TOP_PAD))
+    return text_height, text_pin_y, width / 2, 0
+
+
 def visio_shape_xml(
     shape_id: int,
     node: HierarchyNode,
@@ -635,8 +695,8 @@ def visio_shape_xml(
     pin_x = px_to_visio(x + node.width / 2)
     pin_y = page_height - px_to_visio(y + node.height / 2)
     line_weight = max(0.01, 0.01 * penwidth)
-    font_size = 0.24 if node.depth == 0 else 0.18
-    text_height = 0.45 if "\n" not in label else 0.62
+    font_size = visio_label_font_size(node)
+    text_height, text_pin_y, text_pin_x, vertical_align = visio_text_block_layout(node, label, width, height)
     shape_name = xml_escape(f"{node.module_name}_{shape_id}")
     return f"""    <Shape ID="{shape_id}" Name="{xml_escape(node.module_name)}" NameU="{shape_name}" Type="Shape" LineStyle="0" FillStyle="0" TextStyle="0">
       <Cell N="PinX" V="{visio_number(pin_x)}"/>
@@ -652,9 +712,9 @@ def visio_shape_xml(
       <Cell N="Rounding" V="0.05"/>
       <Cell N="TxtWidth" V="{visio_number(max(0.5, width - 0.25))}"/>
       <Cell N="TxtHeight" V="{visio_number(text_height)}"/>
-      <Cell N="TxtPinX" V="{visio_number(width / 2)}"/>
-      <Cell N="TxtPinY" V="{visio_number(max(0.2, height - text_height / 2 - 0.1))}"/>
-      <Cell N="VerticalAlign" V="0"/>
+      <Cell N="TxtPinX" V="{visio_number(text_pin_x)}"/>
+      <Cell N="TxtPinY" V="{visio_number(text_pin_y)}"/>
+      <Cell N="VerticalAlign" V="{vertical_align}"/>
       <Section N="Character">
         <Row IX="0">
           <Cell N="Size" V="{visio_number(font_size)}"/>
@@ -662,7 +722,7 @@ def visio_shape_xml(
       </Section>
       <Section N="Paragraph">
         <Row IX="0">
-          <Cell N="HorzAlign" V="0"/>
+          <Cell N="HorzAlign" V="1"/>
         </Row>
       </Section>
       <Section N="Geometry" IX="0">
@@ -844,8 +904,8 @@ def visio_vdx_shape_xml(
     loc_pin_x = width / 2
     loc_pin_y = height / 2
     line_weight = max(0.01, 0.01 * penwidth)
-    font_size = 0.24 if node.depth == 0 else 0.18
-    text_height = 0.45 if "\n" not in label else 0.62
+    font_size = visio_label_font_size(node)
+    text_height, text_pin_y, text_pin_x, vertical_align = visio_text_block_layout(node, label, width, height)
     shape_name = xml_escape(f"{node.module_name}_{shape_id}")
     return f"""      <Shape ID="{shape_id}" Name="{xml_escape(node.module_name)}" NameU="{shape_name}" Type="Shape" LineStyle="0" FillStyle="0" TextStyle="0">
         <XForm>
@@ -867,16 +927,16 @@ def visio_vdx_shape_xml(
         <TextBlock>
           <TxtWidth>{visio_number(max(0.5, width - 0.25))}</TxtWidth>
           <TxtHeight>{visio_number(text_height)}</TxtHeight>
-          <TxtPinX>{visio_number(width / 2)}</TxtPinX>
-          <TxtPinY>{visio_number(max(0.2, height - text_height / 2 - 0.1))}</TxtPinY>
-          <VerticalAlign>0</VerticalAlign>
+          <TxtPinX>{visio_number(text_pin_x)}</TxtPinX>
+          <TxtPinY>{visio_number(text_pin_y)}</TxtPinY>
+          <VerticalAlign>{vertical_align}</VerticalAlign>
         </TextBlock>
         <Char IX="0">
           <Font>0</Font>
           <Size>{visio_number(font_size)}</Size>
         </Char>
         <Para IX="0">
-          <HorzAlign>0</HorzAlign>
+          <HorzAlign>1</HorzAlign>
         </Para>
         <Geom IX="0">
           <NoFill>0</NoFill>
