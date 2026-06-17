@@ -717,11 +717,59 @@ def signal_name_similarity(left: str, right: str) -> float:
     return len(left_tokens & right_tokens) / len(left_tokens | right_tokens)
 
 
+def module_port_direction(module: Module, signal: str) -> str:
+    return module.port_directions.get(signal, module.port_directions.get(base_signal(signal), "unknown"))
+
+
 def ref_direction(design: Design, ref: SignalRef) -> str:
     module = design.modules.get(ref.module_name)
     if not module:
         return "unknown"
-    return module.port_directions.get(ref.signal, module.port_directions.get(base_signal(ref.signal), "unknown"))
+    return module_port_direction(module, ref.signal)
+
+
+def module_has_port(module: Module, signal: str) -> bool:
+    signal_base = base_signal(signal)
+    return (
+        signal_in_signals(signal, module.ports)
+        or signal in module.port_directions
+        or signal_base in module.port_directions
+    )
+
+
+def signal_is_locally_driven(module: Module, signal: str) -> bool:
+    return any(signal_in_signals(signal, assignment.lhs_signals) for assignment in module.assignments)
+
+
+def signal_is_driven_by_child_output(design: Design, module: Module, signal: str) -> bool:
+    for instance in module.instances:
+        child_module = design.modules.get(instance.module_type)
+        if not child_module:
+            continue
+        for port_name, expr in instance.connections.items():
+            if port_name.startswith("__pos") or not signal_in_expr(signal, expr):
+                continue
+            if module_port_direction(child_module, port_name) in {"output", "inout"}:
+                return True
+    return False
+
+
+def should_trace_reverse_by_default(design: Design, start: SignalRef) -> bool:
+    module = design.modules.get(start.module_name)
+    if not module:
+        return False
+    direction = module_port_direction(module, start.signal)
+    if direction == "output":
+        return True
+    if direction == "input":
+        return False
+    if not module_has_port(module, start.signal):
+        return False
+    return signal_is_locally_driven(module, start.signal) or signal_is_driven_by_child_output(
+        design,
+        module,
+        start.signal,
+    )
 
 
 def port_connection(instance: Instance, signal: str) -> str | None:
@@ -770,8 +818,7 @@ def path_score(
 def resolve_trace_direction(design: Design, start: SignalRef, requested_direction: str = "auto") -> str:
     if requested_direction in {"forward", "reverse"}:
         return requested_direction
-    start_direction = ref_direction(design, start)
-    return "reverse" if start_direction == "output" else "forward"
+    return "reverse" if should_trace_reverse_by_default(design, start) else "forward"
 
 
 def trace_datapath(
@@ -856,7 +903,7 @@ def trace_datapath(
             for port_name, expr in child.parent_instance.connections.items():
                 if port_name.startswith("__pos"):
                     continue
-                direction = child_module.port_directions.get(port_name, "unknown")
+                direction = module_port_direction(child_module, port_name)
                 if trace_direction == "forward" and direction == "output":
                     continue
                 if trace_direction == "reverse" and direction == "input":
@@ -880,10 +927,7 @@ def trace_datapath(
                 advanced = True
 
         if node.parent and node.parent_instance:
-            direction = module.port_directions.get(
-                current.signal,
-                module.port_directions.get(base_signal(current.signal), "unknown"),
-            )
+            direction = module_port_direction(module, current.signal)
             if trace_direction == "forward":
                 can_cross_to_parent = direction in {"output", "inout", "unknown"}
             else:
