@@ -1098,7 +1098,7 @@ def emit_trace_excalidraw(result: TraceResult) -> str:
         elements.append(arrow)
         if edge.src.signal != edge.dst.signal:
             if result.direction == "reverse":
-                rename_label = f"{edge.dst.signal} -> {edge.src.signal}"
+                rename_label = f"{edge.src.signal} <- {edge.dst.signal}"
             else:
                 rename_label = f"{edge.src.signal} -> {edge.dst.signal}"
         else:
